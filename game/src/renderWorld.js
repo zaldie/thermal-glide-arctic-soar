@@ -12,7 +12,13 @@ const FORWARD_STEPS = [0, 18, 40, 68, 105, 150, 205, 275, 360, 465, 595, 750, 93
 const LATERAL_STEPS = [-3400, -2700, -2150, -1700, -1330, -1040, -800, -605, -455, -340, -240, -160, -95, -45, 0, 45, 95, 160, 240, 340, 455, 605, 800, 1040, 1330, 1700, 2150, 2700, 3400];
 
 export function createRenderer(canvas) {
-  const ctx = canvas.getContext("2d");
+  let ctx = canvas.getContext("2d");
+  // The terrain is painted onto its own layer first, then composited with a
+  // whisper of blur: the last visible facet edges melt into one another
+  // while everything drawn afterwards (trees, runway, glider, HUD) stays
+  // crisp. Browsers without ctx.filter support simply composite it sharp.
+  const terrainCanvas = document.createElement("canvas");
+  const terrainCtx = terrainCanvas.getContext("2d");
   let W = 0;
   let H = 0;
 
@@ -23,6 +29,9 @@ export function createRenderer(canvas) {
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    terrainCanvas.width = canvas.width;
+    terrainCanvas.height = canvas.height;
+    terrainCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   window.addEventListener("resize", resize);
   resize();
@@ -230,8 +239,39 @@ export function createRenderer(canvas) {
         v.col = blendCol(shadeCol(base, shade), palette.fog, fogT);
       }
     }
-    // Painter's order: far rows first. Each triangle takes the average of
-    // its three corner colours.
+    // Painter's order: far rows first. Near and mid triangles are filled
+    // with a linear gradient from one corner to the midpoint of the opposite
+    // edge (a cheap Gouraud approximation): because neighbouring triangles
+    // share corner colours, the ground shades continuously across edges
+    // instead of stepping from slab to slab. Far triangles sit under heavy
+    // fog, so they take a flat average fill and save the gradient cost.
+    function tri(p1, p2, p3) {
+      const depth = (p1.p.depth + p2.p.depth + p3.p.depth) / 3;
+      if (depth > 2600) {
+        ctx.fillStyle = rgb([
+          (p1.col[0] + p2.col[0] + p3.col[0]) / 3,
+          (p1.col[1] + p2.col[1] + p3.col[1]) / 3,
+          (p1.col[2] + p2.col[2] + p3.col[2]) / 3,
+        ]);
+      } else {
+        const mx = (p2.p.x + p3.p.x) / 2;
+        const my = (p2.p.y + p3.p.y) / 2;
+        const grad = ctx.createLinearGradient(p1.p.x, p1.p.y, mx, my);
+        grad.addColorStop(0, rgb(p1.col));
+        grad.addColorStop(1, rgb([
+          (p2.col[0] + p3.col[0]) / 2,
+          (p2.col[1] + p3.col[1]) / 2,
+          (p2.col[2] + p3.col[2]) / 2,
+        ]));
+        ctx.fillStyle = grad;
+      }
+      ctx.beginPath();
+      ctx.moveTo(p1.p.x, p1.p.y);
+      ctx.lineTo(p2.p.x, p2.p.y);
+      ctx.lineTo(p3.p.x, p3.p.y);
+      ctx.closePath();
+      ctx.fill();
+    }
     for (let i = rows - 2; i >= 0; i--) {
       for (let j = 0; j < cols - 1; j++) {
         const a = verts[i][j];
@@ -239,28 +279,8 @@ export function createRenderer(canvas) {
         const c = verts[i + 1][j + 1];
         const d = verts[i + 1][j];
         if (!a.p || !b.p || !c.p || !d.p) continue;
-        ctx.fillStyle = rgb([
-          (a.col[0] + b.col[0] + c.col[0]) / 3,
-          (a.col[1] + b.col[1] + c.col[1]) / 3,
-          (a.col[2] + b.col[2] + c.col[2]) / 3,
-        ]);
-        ctx.beginPath();
-        ctx.moveTo(a.p.x, a.p.y);
-        ctx.lineTo(b.p.x, b.p.y);
-        ctx.lineTo(c.p.x, c.p.y);
-        ctx.closePath();
-        ctx.fill();
-        ctx.fillStyle = rgb([
-          (a.col[0] + c.col[0] + d.col[0]) / 3,
-          (a.col[1] + c.col[1] + d.col[1]) / 3,
-          (a.col[2] + c.col[2] + d.col[2]) / 3,
-        ]);
-        ctx.beginPath();
-        ctx.moveTo(a.p.x, a.p.y);
-        ctx.lineTo(c.p.x, c.p.y);
-        ctx.lineTo(d.p.x, d.p.y);
-        ctx.closePath();
-        ctx.fill();
+        tri(a, b, c);
+        tri(a, c, d);
       }
     }
   }
@@ -856,7 +876,18 @@ export function createRenderer(canvas) {
     const cam = cameraFor(glider, view);
     const project = makeProjector(cam);
     drawSky(palette, time, glider.heading);
+    // Terrain layer: paint offscreen, then blit it back with a slight blur
+    // over the sky already on the main canvas — the soft edge pixels blend
+    // into the sky beneath them, so the skyline gets no dark fringe.
+    const mainCtx = ctx;
+    terrainCtx.clearRect(0, 0, W, H);
+    ctx = terrainCtx;
     drawTerrain(cam, project, palette, time);
+    ctx = mainCtx;
+    ctx.save();
+    ctx.filter = "blur(1.4px)";
+    ctx.drawImage(terrainCanvas, 0, 0, W, H);
+    ctx.restore();
     drawTrees(project, cam);
     drawRunway(project, palette);
     drawVillage(project, palette);
