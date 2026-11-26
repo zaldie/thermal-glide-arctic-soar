@@ -1,0 +1,474 @@
+// main.js — Thermal Glide: Arctic Soar. Boot, state machine and the sortie.
+// This file owns the game's flow (loading, menu, briefing, flying, pause,
+// results, help) and the rules of a flight: rings in order, the mail drop,
+// landings judged honestly, crashes named by their cause. Every other file
+// does one job; this one conducts them.
+
+import { createRenderer } from "./renderWorld.js";
+import { drawHud, drawMenuScreen, drawBriefingScreen, drawPauseScreen, drawResultScreen, drawHelpScreen, drawLoadingScreen, drawErrorScreen } from "./hud.js";
+import { createGliderState, stepGlider, GLIDER } from "./gliderPhysics.js";
+import { createSky, stepSky, airAt } from "./thermalSky.js";
+import { terrainHeight, RUNWAY, WORLD_HALF } from "./terrainSvarra.js";
+import { MISSIONS, FREE_SOAR, SCORE, starsFor } from "./missions.js";
+import { createInput } from "./inputPilot.js";
+import { createAudio } from "./audioVariometer.js";
+import { loadSave, storeSave, recordResult } from "./saveGame.js";
+import { readShotScene } from "./shots.js";
+
+const canvas = document.getElementById("game");
+const statusEl = document.getElementById("status");
+const ctx = canvas.getContext("2d");
+
+const ALL_SORTIES = [...MISSIONS, FREE_SOAR];
+
+let save = loadSave();
+const audio = createAudio(save.settings);
+const input = createInput(canvas);
+
+let renderer = null;
+let bootError = null;
+try {
+  if (!ctx) throw new Error("Canvas 2D is not available in this browser.");
+  renderer = createRenderer(canvas);
+} catch (err) {
+  bootError = err;
+}
+
+// Game state.
+let mode = "loading"; // loading | menu | briefing | flying | paused | result | help
+let loadProgress = 0;
+let time = 0;
+let menuIndex = 0;
+let menuContext = "main"; // main | sorties | settings
+let selectedSortie = 0;
+let mission = MISSIONS[0];
+let glider = null;
+let sky = null;
+let rings = [];
+let ringIndex = 0;
+let score = 0;
+let seconds = 0;
+let dropped = null; // null = carrying, true/false once released (drop quality)
+let packageDroppedAt = null;
+let view = "chase";
+let message = null;
+let result = null;
+let stallCount = 0;
+let wasStalled = false;
+let lastFrame = performance.now();
+let shotScene = readShotScene();
+
+function say(text) {
+  if (statusEl) statusEl.textContent = text;
+}
+
+function showMessage(text, dur = 2.4) {
+  message = { text, until: time + dur };
+}
+
+// ---------- Menu model ----------
+
+function menuItems() {
+  if (menuContext === "sorties") {
+    const items = ALL_SORTIES.map((m, i) => {
+      const locked = i < MISSIONS.length && i >= save.unlocked;
+      const stars = save.stars[m.id] || 0;
+      return {
+        label: locked ? `🔒 ${m.name}` : m.name,
+        note: locked ? "Finish the sortie before this one to unlock it" : (stars ? "★".repeat(stars) + `  best ${save.bestScore[m.id] || 0}` : m.brief),
+        action: locked ? null : () => chooseSortie(i),
+      };
+    });
+    items.push({ label: "← Back", note: "", action: () => { menuContext = "main"; menuIndex = 0; } });
+    return items;
+  }
+  if (menuContext === "settings") {
+    const s = save.settings;
+    return [
+      { label: `Mouse sensitivity: ${s.sensitivity.toFixed(1)}`, note: "Enter cycles 0.6 – 1.6", action: () => { s.sensitivity = s.sensitivity >= 1.6 ? 0.6 : +(s.sensitivity + 0.2).toFixed(1); storeSave(save); } },
+      { label: `Volume: ${Math.round(s.volume * 100)}%`, note: "Enter cycles", action: () => { s.volume = s.volume >= 0.95 ? 0 : +(s.volume + 0.25).toFixed(2); audio.setVolume(s.volume); storeSave(save); } },
+      { label: `Invert Y: ${s.invertY ? "on" : "off"}`, note: "", action: () => { s.invertY = !s.invertY; storeSave(save); } },
+      { label: "← Back", note: "", action: () => { menuContext = "main"; menuIndex = 0; } },
+    ];
+  }
+  const items = [];
+  if (save.continueSortie) {
+    items.push({ label: "Continue sortie", note: `${save.continueSortie.missionName} — pick up where you left off`, action: continueSortie });
+  }
+  items.push({ label: "Fly a sortie", note: "Five missions over the Svarra Archipelago, plus Free Soar", action: () => { menuContext = "sorties"; menuIndex = 0; } });
+  items.push({ label: "How to fly", note: "Ninety seconds of reading that saves your first glider", action: () => { mode = "help"; } });
+  items.push({ label: "Settings", note: "Mouse, sound, stick direction", action: () => { menuContext = "settings"; menuIndex = 0; } });
+  return items;
+}
+
+function chooseSortie(index) {
+  selectedSortie = index;
+  mission = ALL_SORTIES[index];
+  mode = "briefing";
+  say(`Selected ${mission.name}. ${mission.brief}`);
+}
+
+function continueSortie() {
+  const c = save.continueSortie;
+  if (!c) return;
+  const idx = ALL_SORTIES.findIndex((m) => m.id === c.missionId);
+  if (idx < 0) return;
+  selectedSortie = idx;
+  mission = ALL_SORTIES[idx];
+  startFlight(c);
+}
+
+// ---------- Flight setup ----------
+
+function startFlight(resume = null) {
+  const start = resume?.glider ?? mission.start;
+  glider = createGliderState(start.x, start.y, start.z, start.heading, start.speed);
+  if (resume?.glider) {
+    glider.pitch = resume.glider.pitch || 0;
+    glider.roll = resume.glider.roll || 0;
+  }
+  if (start.airbrake) glider.airbrake = true;
+  sky = createSky(mission.seed, mission.sky);
+  if (resume?.dayPhase != null) sky.dayPhase = resume.dayPhase;
+  rings = mission.rings.map((r) => ({ ...r, passed: false }));
+  ringIndex = resume?.ringIndex ?? 0;
+  for (let i = 0; i < ringIndex; i++) if (rings[i]) rings[i].passed = true;
+  score = resume?.score ?? 0;
+  seconds = resume?.seconds ?? 0;
+  dropped = mission.objective === "drop" ? (resume?.dropped ?? null) : undefined;
+  packageDroppedAt = null;
+  stallCount = 0;
+  wasStalled = false;
+  result = null;
+  view = "chase";
+  mode = "flying";
+  showMessage(mission.objective === "free" ? "Free Soar — the sky is yours" : `${mission.name} — ring 1 ahead`, 3);
+  say(`Flying ${mission.name}`);
+}
+
+function applyShotScene() {
+  if (!shotScene) return;
+  mission = shotScene.mission;
+  selectedSortie = shotScene.missionIndex;
+  startFlight();
+  const g = shotScene.glider;
+  Object.assign(glider, g);
+  sky.dayPhase = shotScene.dayPhase;
+  view = shotScene.view;
+  // Compose the HUD numbers the way a real moment in this scene would read.
+  seconds = 42;
+  score = 300;
+  showMessage("", 0);
+  message = null;
+}
+
+// ---------- Flight rules ----------
+
+function checkRingPass(prev) {
+  const ring = rings[ringIndex];
+  if (!ring) return;
+  // Passed if the segment prev->glider crosses near the ring centre.
+  const d = Math.hypot(glider.x - ring.x, glider.y - ring.y, glider.z - ring.z);
+  if (d < ring.radius * 0.92) {
+    ring.passed = true;
+    const centreBonus = d < ring.radius * 0.38;
+    score += centreBonus ? SCORE.ringCentre : SCORE.ringEdge;
+    audio.ringPassed(centreBonus);
+    showMessage(centreBonus ? `Ring ${ringIndex + 1} — dead centre! +${SCORE.ringCentre}` : `Ring ${ringIndex + 1} +${SCORE.ringEdge}`);
+    ringIndex++;
+    if (ringIndex >= rings.length && mission.objective !== "drop") {
+      showMessage("All rings — now land on the ice runway", 3.4);
+    }
+  }
+  void prev;
+}
+
+function tryDrop() {
+  if (mission.objective !== "drop" || dropped !== null) return;
+  const zone = mission.dropZone;
+  const dist = Math.hypot(glider.x - zone.x, glider.z - zone.z);
+  const heightAbove = glider.y - terrainHeight(glider.x, glider.z);
+  if (dist < zone.radius && heightAbove < 280) {
+    dropped = true;
+    const accurate = dist < zone.radius * 0.45 && heightAbove < 190;
+    score += accurate ? SCORE.dropAccurate : SCORE.dropNear;
+    audio.dropped();
+    showMessage(accurate ? `Mail away — right over the circle! +${SCORE.dropAccurate}` : `Mail away +${SCORE.dropNear}`, 3);
+  } else {
+    dropped = false;
+    audio.dropped();
+    showMessage("The mail drifts into the fjord… no points for the drop", 3);
+  }
+  packageDroppedAt = { x: glider.x, z: glider.z };
+}
+
+function finishFlight(finished, title, reason, landingNote = null) {
+  const stars = starsFor(mission, seconds, finished);
+  if (finished && mission.landAtRunway) {
+    const unspent = Math.max(0, glider.y - RUNWAY.groundY);
+    void unspent;
+  }
+  const isBest = finished && score > (save.bestScore[mission.id] || 0);
+  result = {
+    finished, title, reason, landingNote,
+    score: Math.round(score), seconds, stars,
+    ringsFlown: rings.filter((r) => r.passed).length,
+    isBest,
+  };
+  if (mission.objective !== "free") {
+    recordResult(save, mission, result);
+    if (finished) {
+      const idx = MISSIONS.findIndex((m) => m.id === mission.id);
+      if (idx >= 0 && idx + 2 > save.unlocked) {
+        save.unlocked = Math.min(MISSIONS.length, idx + 2);
+        storeSave(save);
+      }
+    }
+  } else {
+    save.totalFlightSeconds = Math.round(save.totalFlightSeconds + seconds);
+    save.continueSortie = null;
+    storeSave(save);
+  }
+  if (finished) audio.landed();
+  mode = "result";
+  say(`${title}. ${reason} Score ${Math.round(score)}.`);
+}
+
+function judgeTouchdown() {
+  // Called the first frame the glider reaches the ground.
+  const groundY = terrainHeight(glider.x, glider.z);
+  const onRunway =
+    Math.abs(glider.x - RUNWAY.centreX) <= RUNWAY.width / 2 + 14 &&
+    Math.abs(glider.z - RUNWAY.centreZ) <= RUNWAY.length / 2 + 20;
+  const sink = glider.verticalSpeed;
+  const headingError = Math.min(Math.abs(glider.heading), Math.abs(Math.abs(glider.heading) - Math.PI * 2));
+  if (glider.y <= 1.5) {
+    // Water.
+    if (rings.every((r) => r.passed) || mission.objective === "free") {
+      audio.crashed();
+      finishFlight(false, "DITCHED IN THE FJORD", "Down on the water, but the fishing boats saw you splash. The glider is lost; the pilot is embarrassed and dry by dinner.");
+    } else {
+      audio.crashed();
+      finishFlight(false, "DOWN IN THE FJORD", `The water took the glider ${rings.length - ringIndex} ring${rings.length - ringIndex === 1 ? "" : "s"} short of done. Height is fuel — the thermals were there.`);
+    }
+    return;
+  }
+  if (onRunway && sink > -3.4 && glider.speed < 30 && Math.abs(glider.roll) < 0.4 && headingError < 0.5) {
+    // A real landing.
+    let landingNote = `touchdown at ${Math.round(glider.speed * 3.6)} km/h, sink ${sink.toFixed(1)} m/s`;
+    if (mission.precisionLanding) {
+      const distTarget = Math.hypot(glider.x - RUNWAY.centreX, glider.z - (RUNWAY.centreZ + RUNWAY.length / 2 - 90));
+      const precision = Math.max(0, Math.round(SCORE.landingPrecisionMax * (1 - distTarget / 320)));
+      score += precision;
+      landingNote += ` · precision +${precision} (${Math.round(distTarget)} m from the numbers)`;
+    }
+    const objectivesDone = rings.every((r) => r.passed) && (mission.objective !== "drop" || dropped === true);
+    if (objectivesDone || mission.objective === "free") {
+      finishFlight(true, mission.objective === "free" ? "DOWN SAFE" : "SORTIE COMPLETE", mission.objective === "free" ? "A free flight, ended the way every flight should end: on the strip, grinning." : "Every objective flown and a landing the strip crew would applaud.", landingNote);
+    } else {
+      finishFlight(false, "DOWN, BUT NOT DONE", "You landed safely — but the sortie's work was not finished, so it does not count as complete.", landingNote);
+    }
+    return;
+  }
+  if (onRunway) {
+    audio.crashed();
+    finishFlight(false, "A ROUGH ARRIVAL", `The strip caught you, but sink ${sink.toFixed(1)} m/s at ${Math.round(glider.speed * 3.6)} km/h is a crash wearing a landing's clothes. Bleed speed, flare gently.`);
+    return;
+  }
+  if (sink > -5.5 && glider.speed < 21) {
+    // A survivable off-field arrival if the objectives were done.
+    const objectivesDone = rings.every((r) => r.passed);
+    audio.crashed();
+    if (objectivesDone) {
+      finishFlight(false, "OUT-LANDING", "Down in one piece on the snow, short of the strip. The crew will fetch you with the snowcat — but the sortie is not complete.");
+    } else {
+      finishFlight(false, "PUT DOWN IN THE SNOW", "The terrain rose to meet you before the work was done. Watch the energy gauge: it never lies.");
+    }
+    return;
+  }
+  audio.crashed();
+  const cause = glider.stalled
+    ? "A stall at low height — there was no sky left to recover in."
+    : sink <= -9
+      ? "The ground arrived faster than the glider could argue with."
+      : "Terrain, met at flying speed.";
+  finishFlight(false, "CRASHED", cause);
+  void groundY;
+}
+
+function saveContinueAndQuit() {
+  if (mission.objective !== "free") {
+    save.continueSortie = {
+      missionId: mission.id,
+      missionName: mission.name,
+      glider: { x: glider.x, y: glider.y, z: glider.z, heading: glider.heading, pitch: glider.pitch, roll: glider.roll, speed: glider.speed },
+      ringIndex, score, seconds,
+      dropped: dropped ?? null,
+      dayPhase: sky.dayPhase,
+    };
+    storeSave(save);
+  }
+  mode = "menu";
+  menuContext = "main";
+  menuIndex = 0;
+}
+
+// ---------- Per-frame update ----------
+
+function updateFlight(dt) {
+  const flightInput = input.sample(save.settings);
+  if (input.consume("KeyC")) view = view === "chase" ? "cockpit" : "chase";
+  if (input.consume("KeyP")) { mode = "paused"; return; }
+  if (flightInput.drop && input.consume("KeyX")) tryDrop();
+  else if (flightInput.drop) { /* X held: consume handled above on press frame */ }
+
+  stepSky(sky, dt);
+  const air = airAt(sky, glider.x, glider.y, glider.z);
+  const prev = { x: glider.x, y: glider.y, z: glider.z };
+  const events = stepGlider(glider, flightInput, air, dt);
+  if (events.stallStarted) {
+    stallCount++;
+    score = Math.max(0, score - SCORE.stallPenalty);
+  }
+  seconds += dt;
+  checkRingPass(prev);
+
+  audio.update(dt, glider);
+  audio.auroraPad(sky.dayPhase > 0.7 && mode === "flying");
+
+  // Ground contact.
+  const groundY = terrainHeight(glider.x, glider.z);
+  if (glider.y <= groundY + 1.6) {
+    glider.y = groundY + 1.6;
+    judgeTouchdown();
+    return;
+  }
+  // Out of the world.
+  if (Math.abs(glider.x) > WORLD_HALF + 400 || Math.abs(glider.z) > WORLD_HALF + 400) {
+    finishFlight(false, "LOST OVER THE ICE", "The archipelago ended and the map with it. The rings, the strip and the thermals were all back the other way.");
+  }
+}
+
+function snapshot() {
+  const groundY = glider ? terrainHeight(glider.x, glider.z) : 0;
+  const air = glider && sky ? airAt(sky, glider.x, glider.y, glider.z) : { lift: 0 };
+  return {
+    glider, sky, rings, activeRing: ringIndex, view, time,
+    mission, ringIndex, score, seconds,
+    verticalSpeed: glider ? glider.verticalSpeed : 0,
+    groundY,
+    sinkWarning: glider ? glider.verticalSpeed < -4.2 && air.lift < 0.5 : false,
+    stormWarning: sky?.squall.active && Math.abs(glider.x - sky.squall.x) < sky.squall.width * 1.8,
+    message, dropped, result, save,
+    menuItems: menuItems(),
+    menuIndex,
+  };
+}
+
+// ---------- Input for menus ----------
+
+canvas.addEventListener("mousedown", () => {
+  audio.unlock();
+  if (mode === "briefing") startFlight();
+  else if (mode === "menu") activateMenuItem();
+  else if (mode === "result") { mode = "menu"; menuContext = "main"; menuIndex = 0; }
+});
+window.addEventListener("keydown", (e) => {
+  audio.unlock();
+  if (mode === "menu") {
+    const items = menuItems();
+    if (e.code === "ArrowUp" || e.code === "KeyW") menuIndex = (menuIndex + items.length - 1) % items.length;
+    if (e.code === "ArrowDown" || e.code === "KeyS") menuIndex = (menuIndex + 1) % items.length;
+    if (e.code === "Enter") activateMenuItem();
+  } else if (mode === "briefing" && e.code === "Enter") {
+    startFlight();
+  } else if (mode === "help" && e.code === "Escape") {
+    mode = "menu";
+  } else if (mode === "paused") {
+    if (e.code === "KeyP" || e.code === "Enter") mode = "flying";
+    if (e.code === "Escape") saveContinueAndQuit();
+  } else if (mode === "flying" && e.code === "Escape") {
+    mode = "paused";
+  } else if (mode === "result" && e.code === "Enter") {
+    mode = "menu";
+    menuContext = "main";
+    menuIndex = 0;
+  }
+});
+
+function activateMenuItem() {
+  const item = menuItems()[menuIndex];
+  if (item?.action) item.action();
+}
+
+// ---------- Main loop ----------
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.033, (now - lastFrame) / 1000 || 0.016);
+  lastFrame = now;
+  time += dt;
+  const { W, H } = renderer ? renderer.size : { W: canvas.clientWidth, H: canvas.clientHeight };
+
+  if (bootError) {
+    drawErrorScreen(ctx, W, H, `${bootError.message} Try a current desktop Chrome. Your save and settings are untouched.`);
+    return;
+  }
+  if (mode === "loading") {
+    loadProgress = Math.min(1, loadProgress + dt * 0.8);
+    drawLoadingScreen(ctx, W, H, loadProgress);
+    if (loadProgress >= 1) {
+      if (shotScene) applyShotScene();
+      else mode = "menu";
+    }
+    return;
+  }
+  if (mode === "flying") updateFlight(dt);
+  if (mode === "flying" || mode === "paused" || mode === "result") {
+    const snap = snapshot();
+    renderer.draw(snap);
+    drawHud(ctx, W, H, snap);
+    if (mode === "paused") drawPauseScreen(ctx, W, H);
+    if (mode === "result") drawResultScreen(ctx, W, H, snap);
+    return;
+  }
+  // Menu, briefing and help float over a slowly orbiting demo flight.
+  drawBackdrop(dt);
+  const snap = snapshotForBackdrop();
+  if (mode === "menu") drawMenuScreen(ctx, W, H, snap);
+  else if (mode === "briefing") drawBriefingScreen(ctx, W, H, snap);
+  else if (mode === "help") drawHelpScreen(ctx, W, H);
+}
+
+let backdropState = null;
+function drawBackdrop(dt) {
+  if (!backdropState) {
+    const m = MISSIONS[0];
+    backdropState = {
+      glider: createGliderState(m.start.x, m.start.y + 60, m.start.z + 500, 0.2, 25),
+      sky: createSky(3, { startPhase: 0.12, phaseLength: 9999 }),
+      rings: m.rings.map((r) => ({ ...r })),
+    };
+  }
+  const b = backdropState;
+  stepSky(b.sky, dt);
+  const air = airAt(b.sky, b.glider.x, b.glider.y, b.glider.z);
+  stepGlider(b.glider, { pitchInput: 0.12, rollInput: Math.sin(time * 0.24) * 0.4, airbrake: false }, air, dt);
+  if (b.glider.y < terrainHeight(b.glider.x, b.glider.z) + 130) b.glider.y += 60 * dt;
+  if (Math.abs(b.glider.x) > 3200 || Math.abs(b.glider.z) > 4200) {
+    b.glider.x = MISSIONS[0].start.x;
+    b.glider.z = MISSIONS[0].start.z + 500;
+  }
+  renderer.draw({ glider: b.glider, sky: b.sky, rings: b.rings, activeRing: 0, view: "chase", time, dropZone: null });
+}
+
+function snapshotForBackdrop() {
+  const base = snapshot();
+  return { ...base, mission, save, time };
+}
+
+// In shot mode the backdrop glider must not replace the composed scene.
+const originalFrame = frame;
+void originalFrame;
+requestAnimationFrame(frame);
+say("Thermal Glide: Arctic Soar loaded");
