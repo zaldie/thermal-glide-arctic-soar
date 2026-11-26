@@ -1,42 +1,588 @@
-// renderWorld.js — the painter that turns Svarra into pixels.
-// One job: draw the world from the glider's camera onto the 2D canvas — sky,
-// terrain grid, fjord water, runway, village, lighthouse, thermal spirals,
-// birds, checkpoint rings and the glider itself (chase view) or its cockpit
-// (cockpit view). No game rules live here; main.js hands it a snapshot.
+// renderWorld.js — the painter that turns Svarra into pixels, now in WebGL.
+// One job: draw the world from the glider's camera — shader sky with sun,
+// stars and aurora, a smooth-shaded terrain mesh, forest, village, runway,
+// lighthouse, thermal spirals, gulls, checkpoint rings and a real 3D glider —
+// then finish the frame with the 2D cockpit, speed streaks and vignette on
+// the overlay canvas. No game rules live here; main.js hands it a snapshot.
 
 import { terrainHeight, surfaceAt, terrainColorAt, RUNWAY, VILLAGE, LIGHTHOUSE, WORLD_HALF } from "./terrainSvarra.js";
 import { skyPalette } from "./thermalSky.js";
 import { clamp } from "./gliderPhysics.js";
+import {
+  MeshBuilder, buildTerrainGeometry, buildRingGeometry, buildTorusGeometry,
+  mat4Perspective, mat4Multiply, mat4View, mat4Model, mat4Identity,
+} from "./glMesh.js";
 
-const FORWARD_STEPS = [0, 18, 40, 68, 105, 150, 205, 275, 360, 465, 595, 750, 935, 1155, 1410, 1705, 2045, 2435, 2880, 3385, 3955, 4600, 5330, 5900];
-const LATERAL_STEPS = [-3400, -2700, -2150, -1700, -1330, -1040, -800, -605, -455, -340, -240, -160, -95, -45, 0, 45, 95, 160, 240, 340, 455, 605, 800, 1040, 1330, 1700, 2150, 2700, 3400];
+const FOG_NEAR = 420;
+const FOG_FAR = 5600;
 
-export function createRenderer(canvas) {
-  let ctx = canvas.getContext("2d");
-  // The terrain is painted onto its own layer first, then composited with a
-  // whisper of blur: the last visible facet edges melt into one another
-  // while everything drawn afterwards (trees, runway, glider, HUD) stays
-  // crisp. Browsers without ctx.filter support simply composite it sharp.
-  const terrainCanvas = document.createElement("canvas");
-  const terrainCtx = terrainCanvas.getContext("2d");
+const LIT_VERT = `
+attribute vec3 aPos;
+attribute vec3 aNormal;
+attribute vec3 aColor;
+attribute float aSpec;
+uniform mat4 uMVP;
+uniform mat4 uModel;
+varying vec3 vColor;
+varying vec3 vNormalW;
+varying vec3 vWorld;
+varying float vSpec;
+void main() {
+  vec4 w = uModel * vec4(aPos, 1.0);
+  vWorld = w.xyz;
+  vNormalW = mat3(uModel) * aNormal;
+  vColor = aColor;
+  vSpec = aSpec;
+  gl_Position = uMVP * vec4(aPos, 1.0);
+}`;
+
+const LIT_FRAG = `
+precision mediump float;
+varying vec3 vColor;
+varying vec3 vNormalW;
+varying vec3 vWorld;
+varying float vSpec;
+uniform vec3 uSunDir;
+uniform vec3 uSunColor;
+uniform vec3 uAmbient;
+uniform vec3 uFogColor;
+uniform vec3 uCamPos;
+uniform float uEmissive;
+uniform float uAlpha;
+uniform float uTime;
+uniform vec3 uTint;
+void main() {
+  vec3 n = normalize(vNormalW);
+  if (!gl_FrontFacing) n = -n;
+  if (vSpec > 0.6) {
+    // Open water: a slow, broad ripple walks the normal so the fjord
+    // glitters in swells, not in a checkerboard.
+    n = normalize(n + vec3(
+      sin(vWorld.x * 0.045 + uTime * 1.3) * 0.035, 0.0,
+      cos(vWorld.z * 0.038 + uTime * 1.7) * 0.035));
+  }
+  float diff = clamp((dot(n, uSunDir) + 0.38) / 1.38, 0.0, 1.0);
+  vec3 col = vColor * uTint * (uAmbient + uSunColor * diff);
+  vec3 vdir = normalize(uCamPos - vWorld);
+  vec3 hv = normalize(vdir + uSunDir);
+  col += uSunColor * pow(max(dot(n, hv), 0.0), 28.0) * vSpec * 0.55;
+  col += vColor * uTint * uEmissive;
+  float dist = length(uCamPos - vWorld);
+  float f = smoothstep(${FOG_NEAR}.0, ${FOG_FAR}.0, dist);
+  col = mix(col, uFogColor, f);
+  gl_FragColor = vec4(col, uAlpha);
+}`;
+
+const SKY_VERT = `
+attribute vec2 aNDC;
+varying vec2 vNDC;
+void main() {
+  vNDC = aNDC;
+  gl_Position = vec4(aNDC, 0.9999, 1.0);
+}`;
+
+const SKY_FRAG = `
+precision mediump float;
+varying vec2 vNDC;
+uniform vec3 uRight;
+uniform vec3 uUp;
+uniform vec3 uFwd;
+uniform float uTanF;
+uniform float uAspect;
+uniform vec3 uTop;
+uniform vec3 uHorizon;
+uniform vec3 uFog;
+uniform vec3 uSunDir;
+uniform vec3 uSunTint;
+uniform float uSunI;
+uniform float uAurora;
+uniform float uTime;
+float hash13(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+void main() {
+  vec3 dir = normalize(uFwd + uRight * (vNDC.x * uTanF * uAspect) + uUp * (vNDC.y * uTanF));
+  float y = dir.y;
+  vec3 col = mix(uHorizon, uTop, pow(clamp(y, 0.0, 1.0), 0.58));
+  col = mix(uFog, col, smoothstep(0.0, 0.14, y));
+  if (y < 0.0) col = mix(uFog, uFog * 0.9, clamp(-y * 3.0, 0.0, 1.0));
+  float sd = dot(dir, uSunDir);
+  col += uSunTint * pow(max(sd, 0.0), 300.0) * 0.75 * uSunI;
+  col += uSunTint * smoothstep(0.99955, 0.99985, sd) * 3.0 * uSunI;
+  col += uSunTint * pow(max(sd, 0.0), 7.0) * 0.1 * uSunI;
+  if (uSunI < 0.5 && y > 0.0) {
+    vec3 cell = floor(dir * 220.0);
+    float h = hash13(cell);
+    float star = step(0.9975, h) * (0.5 - uSunI) * 2.0;
+    float tw = 0.75 + 0.25 * sin(uTime * 2.0 + h * 40.0);
+    col += vec3(0.9, 0.95, 1.0) * star * tw * smoothstep(0.02, 0.2, y);
+  }
+  if (uAurora > 0.01 && y > 0.0) {
+    float band = sin(dir.x * 5.0 + uTime * 0.11 + sin(dir.z * 3.0 + uTime * 0.05) * 1.7);
+    float band2 = sin(dir.x * 11.0 - uTime * 0.07 + dir.y * 6.0);
+    float curtain = smoothstep(0.03, 0.35, y) * smoothstep(0.9, 0.3, y);
+    float rays = 0.55 + 0.45 * band * band2;
+    col += vec3(0.16, 0.95, 0.45) * curtain * rays * uAurora * 0.5;
+    col += vec3(0.45, 0.2, 0.8) * curtain * (0.5 + 0.5 * band2) * uAurora * 0.16;
+  }
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+const SPRITE_VERT = `
+attribute vec3 aPos;
+attribute vec2 aCorner;
+attribute vec2 aSize;
+attribute vec4 aColor;
+uniform mat4 uProj;
+uniform mat4 uView;
+uniform vec3 uRight;
+uniform vec3 uUp;
+uniform vec4 uTint;
+uniform float uDrift;
+uniform float uWrap;
+varying vec2 vUv;
+varying vec4 vColor;
+varying float vFogF;
+void main() {
+  vec3 centre = aPos;
+  centre.x = mix(centre.x, mod(centre.x + uDrift + ${WORLD_HALF}.0, ${WORLD_HALF * 2}.0) - ${WORLD_HALF}.0, uWrap);
+  vec3 wp = centre + uRight * (aCorner.x * aSize.x) + uUp * (aCorner.y * aSize.y);
+  vec4 vp = uView * vec4(wp, 1.0);
+  vFogF = smoothstep(${FOG_NEAR}.0, ${FOG_FAR}.0, -vp.z);
+  vUv = aCorner * 0.5 + 0.5;
+  vColor = aColor * uTint;
+  gl_Position = uProj * vp;
+}`;
+
+const SPRITE_FRAG = `
+precision mediump float;
+varying vec2 vUv;
+varying vec4 vColor;
+varying float vFogF;
+uniform sampler2D uTex;
+uniform vec3 uFogColor;
+void main() {
+  vec4 tex = texture2D(uTex, vUv);
+  vec4 col = tex * vColor;
+  col.rgb = mix(col.rgb, uFogColor, vFogF * 0.7);
+  gl_FragColor = col;
+}`;
+
+const FLAT_VERT = `
+attribute vec3 aPos;
+attribute vec4 aColor;
+uniform mat4 uMVP;
+varying vec4 vColor;
+void main() {
+  vColor = aColor;
+  gl_Position = uMVP * vec4(aPos, 1.0);
+}`;
+
+const FLAT_FRAG = `
+precision mediump float;
+varying vec4 vColor;
+void main() {
+  gl_FragColor = vColor;
+}`;
+
+function compileProgram(gl, vertSrc, fragSrc) {
+  const make = (type, src) => {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      throw new Error("Shader failed: " + gl.getShaderInfoLog(sh));
+    }
+    return sh;
+  };
+  const prog = gl.createProgram();
+  gl.attachShader(prog, make(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, make(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    throw new Error("Program link failed: " + gl.getProgramInfoLog(prog));
+  }
+  return prog;
+}
+
+function treeHash(ix, iz) {
+  let n = ix * 2246822519 + iz * 3266489917;
+  n = (n ^ (n >> 15)) * 2654435761;
+  return (((n ^ (n >> 13)) >>> 0) % 1000) / 1000;
+}
+
+const rgb255 = (c) => [c[0] / 255, c[1] / 255, c[2] / 255];
+
+export function createRenderer(glCanvas, fxCanvas) {
+  const gl = glCanvas.getContext("webgl", { antialias: true, alpha: false });
+  if (!gl) throw new Error("WebGL is not available in this browser.");
+  if (!gl.getExtension("OES_element_index_uint")) {
+    throw new Error("WebGL index extension is not available in this browser.");
+  }
+  const fx = fxCanvas.getContext("2d");
   let W = 0;
   let H = 0;
 
   function resize() {
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    W = canvas.clientWidth;
-    H = canvas.clientHeight;
-    canvas.width = Math.round(W * dpr);
-    canvas.height = Math.round(H * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    terrainCanvas.width = canvas.width;
-    terrainCanvas.height = canvas.height;
-    terrainCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    W = glCanvas.clientWidth;
+    H = glCanvas.clientHeight;
+    for (const c of [glCanvas, fxCanvas]) {
+      c.width = Math.round(W * dpr);
+      c.height = Math.round(H * dpr);
+    }
+    fx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    gl.viewport(0, 0, glCanvas.width, glCanvas.height);
   }
   window.addEventListener("resize", resize);
   resize();
 
-  // Camera basis from the glider state and the view mode.
+  const litProg = compileProgram(gl, LIT_VERT, LIT_FRAG);
+  const skyProg = compileProgram(gl, SKY_VERT, SKY_FRAG);
+  const skyLoc = {
+    aNDC: gl.getAttribLocation(skyProg, "aNDC"),
+    uRight: gl.getUniformLocation(skyProg, "uRight"),
+    uUp: gl.getUniformLocation(skyProg, "uUp"),
+    uFwd: gl.getUniformLocation(skyProg, "uFwd"),
+    uTanF: gl.getUniformLocation(skyProg, "uTanF"),
+    uAspect: gl.getUniformLocation(skyProg, "uAspect"),
+    uTop: gl.getUniformLocation(skyProg, "uTop"),
+    uHorizon: gl.getUniformLocation(skyProg, "uHorizon"),
+    uFog: gl.getUniformLocation(skyProg, "uFog"),
+    uSunDir: gl.getUniformLocation(skyProg, "uSunDir"),
+    uSunTint: gl.getUniformLocation(skyProg, "uSunTint"),
+    uSunI: gl.getUniformLocation(skyProg, "uSunI"),
+    uAurora: gl.getUniformLocation(skyProg, "uAurora"),
+    uTime: gl.getUniformLocation(skyProg, "uTime"),
+  };
+  const skyBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, skyBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const spriteProg = compileProgram(gl, SPRITE_VERT, SPRITE_FRAG);
+  const flatProg = compileProgram(gl, FLAT_VERT, FLAT_FRAG);
+  const lit = {
+    aPos: gl.getAttribLocation(litProg, "aPos"),
+    aNormal: gl.getAttribLocation(litProg, "aNormal"),
+    aColor: gl.getAttribLocation(litProg, "aColor"),
+    aSpec: gl.getAttribLocation(litProg, "aSpec"),
+    uMVP: gl.getUniformLocation(litProg, "uMVP"),
+    uModel: gl.getUniformLocation(litProg, "uModel"),
+    uSunDir: gl.getUniformLocation(litProg, "uSunDir"),
+    uSunColor: gl.getUniformLocation(litProg, "uSunColor"),
+    uAmbient: gl.getUniformLocation(litProg, "uAmbient"),
+    uFogColor: gl.getUniformLocation(litProg, "uFogColor"),
+    uCamPos: gl.getUniformLocation(litProg, "uCamPos"),
+    uEmissive: gl.getUniformLocation(litProg, "uEmissive"),
+    uAlpha: gl.getUniformLocation(litProg, "uAlpha"),
+    uTime: gl.getUniformLocation(litProg, "uTime"),
+    uTint: gl.getUniformLocation(litProg, "uTint"),
+  };
+
+  function uploadGeometry(geo) {
+    const mk = (data, itemSize, attrib) => {
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+      return { buf, itemSize, attrib };
+    };
+    const ibo = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geo.indices, gl.STATIC_DRAW);
+    return {
+      streams: [
+        mk(geo.positions, 3, lit.aPos),
+        mk(geo.normals, 3, lit.aNormal),
+        mk(geo.colors, 3, lit.aColor),
+        mk(geo.specs, 1, lit.aSpec),
+      ],
+      ibo,
+      count: geo.indices.length,
+    };
+  }
+
+  function drawMesh(mesh, mvp, model, opts = {}) {
+    for (const s of mesh.streams) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, s.buf);
+      gl.enableVertexAttribArray(s.attrib);
+      gl.vertexAttribPointer(s.attrib, s.itemSize, gl.FLOAT, false, 0, 0);
+    }
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.ibo);
+    gl.uniformMatrix4fv(lit.uMVP, false, mvp);
+    gl.uniformMatrix4fv(lit.uModel, false, model);
+    gl.uniform1f(lit.uEmissive, opts.emissive ?? 0);
+    gl.uniform1f(lit.uAlpha, opts.alpha ?? 1);
+    const tint = opts.tint || [1, 1, 1];
+    gl.uniform3f(lit.uTint, tint[0], tint[1], tint[2]);
+    gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
+  }
+
+  // ---------- Static scene, built once ----------
+  const terrainMesh = uploadGeometry(buildTerrainGeometry(terrainHeight, terrainColorAt, WORLD_HALF, 240));
+
+  const forest = new MeshBuilder();
+  {
+    const cell = 150;
+    const span = Math.floor(WORLD_HALF / cell);
+    for (let ix = -span; ix <= span; ix++) {
+      for (let iz = -span; iz <= span; iz++) {
+        if (treeHash(ix, iz) > 0.34) continue;
+        const jx = ix * cell + (treeHash(ix + 40, iz) - 0.5) * 80;
+        const jz = iz * cell + (treeHash(ix, iz + 40) - 0.5) * 80;
+        const gy = terrainHeight(jx, jz);
+        if (gy < 18 || gy > 215) continue;
+        const surf = surfaceAt(jx, jz, gy);
+        if (surf !== "snow" && surf !== "shore" && surf !== "tundra") continue;
+        const s = 0.8 + treeHash(ix - 40, iz + 9) * 0.55;
+        const shade = 0.85 + treeHash(ix + 7, iz - 40) * 0.35;
+        const fol = [0.13 * shade, 0.28 * shade, 0.22 * shade];
+        forest.box(jx, gy + 1.5 * s, jz, 0.55 * s, 3 * s, 0.55 * s, [0.29, 0.22, 0.15], 0.02);
+        forest.cone(jx, gy + 2.6 * s, jz, 3.5 * s, 9.5 * s, 7, fol, 0.03);
+        forest.cone(jx, gy + 7.2 * s, jz, 2.4 * s, 7.5 * s, 7, fol, 0.03);
+        forest.cone(jx, gy + 12.6 * s, jz, 0.95 * s, 2.4 * s, 6, [0.93, 0.96, 0.98], 0.05);
+      }
+    }
+  }
+  const forestMesh = uploadGeometry(forest.build());
+
+  const village = new MeshBuilder();
+  const windows = new MeshBuilder();
+  for (let i = 0; i < VILLAGE.houses; i++) {
+    const hx = VILLAGE.x + ((i * 67) % 220) - 110;
+    const hz = VILLAGE.z + ((i * 113) % 200) - 100;
+    const gy = terrainHeight(hx, hz);
+    const rotY = ((i % 4) - 1.5) * 0.14;
+    const wall = i % 3 === 0 ? [0.71, 0.31, 0.18] : [0.48, 0.29, 0.20];
+    village.box(hx, gy + 4.5, hz, 16, 9, 13, wall, 0.04, rotY);
+    village.roof(hx, gy + 9, hz, 18.5, 5, 15.5, [0.91, 0.89, 0.83], 0.05, rotY);
+    const cos = Math.cos(rotY), sin = Math.sin(rotY);
+    for (const dx of [-3.6, 3.6]) {
+      const wx = hx + dx * cos - 6.56 * sin;
+      const wz = hz + dx * sin + 6.56 * cos;
+      windows.box(wx, gy + 4.6, wz, 1.7, 1.7, 0.24, [1.0, 0.77, 0.38], 0, rotY);
+    }
+  }
+  const villageMesh = uploadGeometry(village.build());
+  const windowsMesh = uploadGeometry(windows.build());
+
+  const runway = new MeshBuilder();
+  runway.box(RUNWAY.centreX, RUNWAY.groundY - 0.1, RUNWAY.centreZ, RUNWAY.width, 1, RUNWAY.length, [0.74, 0.80, 0.84], 0.06);
+  for (let i = -4; i < 5; i++) {
+    runway.box(RUNWAY.centreX, RUNWAY.groundY + 0.55, RUNWAY.centreZ + i * 62 + 15, 1.6, 0.08, 30, [0.95, 0.97, 0.98], 0.02);
+  }
+  runway.box(RUNWAY.centreX, RUNWAY.groundY + 0.55, RUNWAY.centreZ + RUNWAY.length / 2 - 14, RUNWAY.width - 6, 0.08, 2.4, [1.0, 0.81, 0.3], 0.02);
+  const runwayMesh = uploadGeometry(runway.build());
+
+  const lightBase = terrainHeight(LIGHTHOUSE.x, LIGHTHOUSE.z);
+  const lighthouse = new MeshBuilder();
+  lighthouse.cylinder(LIGHTHOUSE.x, lightBase, LIGHTHOUSE.z, 3.1, 40, 12, [0.91, 0.89, 0.85], 0.06);
+  lighthouse.cylinder(LIGHTHOUSE.x, lightBase + 21, LIGHTHOUSE.z, 3.16, 7, 12, [0.76, 0.24, 0.16], 0.06);
+  lighthouse.cylinder(LIGHTHOUSE.x, lightBase + 40, LIGHTHOUSE.z, 3.7, 1.4, 12, [0.16, 0.18, 0.2], 0.1);
+  const lighthouseMesh = uploadGeometry(lighthouse.build());
+  const lamp = new MeshBuilder();
+  lamp.sphere(LIGHTHOUSE.x, lightBase + 43, LIGHTHOUSE.z, 1.9, [1.0, 0.84, 0.43], 0.2);
+  const lampMesh = uploadGeometry(lamp.build());
+  // The rotating beam: a long flat cone of light along +Z from the lamp.
+  const beamGeo = (() => {
+    const positions = [0, 0, 0], normals = [0, 1, 0], colors = [1, 0.9, 0.6], specs = [0], indices = [];
+    const segs = 12, len = 340, rad = 30;
+    for (let i = 0; i <= segs; i++) {
+      const a = (i / segs) * Math.PI * 2;
+      positions.push(Math.cos(a) * rad, Math.sin(a) * rad, len);
+      normals.push(0, 1, 0);
+      colors.push(1, 0.9, 0.6);
+      specs.push(0);
+    }
+    for (let i = 0; i < segs; i++) indices.push(0, i + 1, i + 2);
+    return {
+      positions: new Float32Array(positions), normals: new Float32Array(normals),
+      colors: new Float32Array(colors), specs: new Float32Array(specs),
+      indices: new Uint32Array(indices),
+    };
+  })();
+  const beamMesh = uploadGeometry(beamGeo);
+
+  const torusMesh = uploadGeometry(buildTorusGeometry(0.055, 40, 10));
+  const discMesh = uploadGeometry(buildRingGeometry(0.02, 1, 40));
+  const ringBandMesh = uploadGeometry(buildRingGeometry(0.93, 1, 40));
+
+  // The glider as a small scale model: lathe fuselage, tapered wing panels
+  // with red tip bands, glass canopy, T-tail and airbrake panels.
+  const gliderBody = new MeshBuilder();
+  {
+    const cream = [0.98, 0.93, 0.83];
+    const orange = [0.93, 0.38, 0.19];
+    const red = [0.72, 0.23, 0.12];
+    gliderBody.lathe([
+      [-3.6, 0.04], [-3.0, 0.34], [-2.0, 0.55], [-0.8, 0.62], [0.6, 0.56],
+      [1.8, 0.4], [2.8, 0.24], [3.5, 0.1],
+    ], 12, cream, 0.3);
+    gliderBody.wing(0.25, 6.1, 0.14, -0.95, -0.6, 1.2, 0.62, 0.1, orange, 0.14);
+    gliderBody.wing(-0.25, -6.1, 0.14, -0.95, -0.6, 1.2, 0.62, 0.1, orange, 0.14);
+    gliderBody.wing(6.1, 7.5, 0.14, -0.6, -0.42, 0.62, 0.5, 0.1, red, 0.14);
+    gliderBody.wing(-6.1, -7.5, 0.14, -0.6, -0.42, 0.62, 0.5, 0.1, red, 0.14);
+    gliderBody.box(7.45, 0.42, -0.2, 0.09, 0.6, 0.5, red, 0.1);
+    gliderBody.box(-7.45, 0.42, -0.2, 0.09, 0.6, 0.5, red, 0.1);
+    gliderBody.wing(0.12, 1.75, 0.3, 2.95, 3.0, 0.72, 0.55, 0.07, orange, 0.12);
+    gliderBody.wing(-0.12, -1.75, 0.3, 2.95, 3.0, 0.72, 0.55, 0.07, orange, 0.12);
+    gliderBody.box(0, 0.85, 3.15, 0.09, 1.25, 0.62, orange, 0.12);
+    gliderBody.box(0, 1.42, 3.15, 0.1, 0.35, 0.62, red, 0.12);
+  }
+  const gliderMesh = uploadGeometry(gliderBody.build());
+  const canopy = new MeshBuilder();
+  canopy.sphere(0, 0.3, -1.45, 0.52, [0.16, 0.32, 0.45], 1.0, 0.82);
+  const canopyMesh = uploadGeometry(canopy.build());
+  const brakes = new MeshBuilder();
+  brakes.box(3.4, 0.32, -0.35, 1.5, 0.3, 0.7, [0.55, 0.19, 0.11], 0.1);
+  brakes.box(-3.4, 0.32, -0.35, 1.5, 0.3, 0.7, [0.55, 0.19, 0.11], 0.1);
+  const brakesMesh = uploadGeometry(brakes.build());
+  const navLights = new MeshBuilder();
+  navLights.sphere(-7.5, 0.14, -0.2, 0.3, [1, 0.2, 0.2], 0);
+  navLights.sphere(7.5, 0.14, -0.2, 0.3, [0.2, 1, 0.45], 0);
+  const navLightsMesh = uploadGeometry(navLights.build());
+  const strobe = new MeshBuilder();
+  strobe.sphere(0, 0.1, 3.55, 0.26, [1, 1, 1], 0);
+  const strobeMesh = uploadGeometry(strobe.build());
+
+  // ---------- Sprites: clouds and runway edge lights ----------
+  const puffTexture = (() => {
+    const c = document.createElement("canvas");
+    c.width = 128; c.height = 128;
+    const g = c.getContext("2d");
+    for (const [x, y, r, a] of [[64, 70, 46, 0.55], [38, 76, 30, 0.4], [92, 76, 32, 0.4], [64, 52, 30, 0.45]]) {
+      const grad = g.createRadialGradient(x, y, 0, x, y, r);
+      grad.addColorStop(0, `rgba(255,255,255,${a})`);
+      grad.addColorStop(1, "rgba(255,255,255,0)");
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 128, 128);
+    }
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return tex;
+  })();
+
+  const spriteLoc = {
+    aPos: gl.getAttribLocation(spriteProg, "aPos"),
+    aCorner: gl.getAttribLocation(spriteProg, "aCorner"),
+    aSize: gl.getAttribLocation(spriteProg, "aSize"),
+    aColor: gl.getAttribLocation(spriteProg, "aColor"),
+    uProj: gl.getUniformLocation(spriteProg, "uProj"),
+    uView: gl.getUniformLocation(spriteProg, "uView"),
+    uRight: gl.getUniformLocation(spriteProg, "uRight"),
+    uUp: gl.getUniformLocation(spriteProg, "uUp"),
+    uTint: gl.getUniformLocation(spriteProg, "uTint"),
+    uDrift: gl.getUniformLocation(spriteProg, "uDrift"),
+    uWrap: gl.getUniformLocation(spriteProg, "uWrap"),
+    uTex: gl.getUniformLocation(spriteProg, "uTex"),
+    uFogColor: gl.getUniformLocation(spriteProg, "uFogColor"),
+  };
+
+  function makeSpriteBuffer(items) {
+    // Each item: {x, y, z, w, h, r, g, b, a}. Four verts per sprite.
+    const pos = [], corner = [], size = [], col = [];
+    for (const it of items) {
+      for (const [cx, cy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        pos.push(it.x, it.y, it.z);
+        corner.push(cx, cy);
+        size.push(it.w, it.h);
+        col.push(it.r, it.g, it.b, it.a);
+      }
+    }
+    const idx = [];
+    for (let i = 0; i < items.length; i++) {
+      const b = i * 4;
+      idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+    }
+    const mk = (arr, type) => {
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.STATIC_DRAW);
+      return buf;
+    };
+    const ibo = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
+    return { pos: mk(pos), corner: mk(corner), size: mk(size), col: mk(col), ibo, count: idx.length };
+  }
+
+  function drawSprites(buf, proj, view, right, up, tint, drift, wrap, fogColor) {
+    gl.useProgram(spriteProg);
+    const bind = (bufObj, attrib, n) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufObj);
+      gl.enableVertexAttribArray(attrib);
+      gl.vertexAttribPointer(attrib, n, gl.FLOAT, false, 0, 0);
+    };
+    bind(buf.pos, spriteLoc.aPos, 3);
+    bind(buf.corner, spriteLoc.aCorner, 2);
+    bind(buf.size, spriteLoc.aSize, 2);
+    bind(buf.col, spriteLoc.aColor, 4);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf.ibo);
+    gl.uniformMatrix4fv(spriteLoc.uProj, false, proj);
+    gl.uniformMatrix4fv(spriteLoc.uView, false, view);
+    gl.uniform3f(spriteLoc.uRight, right[0], right[1], right[2]);
+    gl.uniform3f(spriteLoc.uUp, up[0], up[1], up[2]);
+    gl.uniform4f(spriteLoc.uTint, tint[0], tint[1], tint[2], tint[3]);
+    gl.uniform1f(spriteLoc.uDrift, drift);
+    gl.uniform1f(spriteLoc.uWrap, wrap);
+    gl.uniform3f(spriteLoc.uFogColor, fogColor[0], fogColor[1], fogColor[2]);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, puffTexture);
+    gl.uniform1i(spriteLoc.uTex, 0);
+    gl.drawElements(gl.TRIANGLES, buf.count, gl.UNSIGNED_INT, 0);
+  }
+
+  const cloudSprites = makeSpriteBuffer(Array.from({ length: 46 }, (_, i) => {
+    const h1 = treeHash(i * 3 + 11, 7);
+    const h2 = treeHash(5, i * 7 + 3);
+    const h3 = treeHash(i + 90, i - 40);
+    return {
+      x: (h1 - 0.5) * 11000, y: 540 + h2 * 380, z: (h3 - 0.5) * 11000,
+      w: 400 + h2 * 460, h: 85 + h3 * 85,
+      r: 1, g: 1, b: 1, a: 0.22 + h1 * 0.14,
+    };
+  }));
+
+  const edgeLightSprites = (() => {
+    const items = [];
+    for (let dz = -RUNWAY.length / 2 + 30; dz < RUNWAY.length / 2; dz += 78) {
+      for (const side of [-1, 1]) {
+        items.push({
+          x: RUNWAY.centreX + side * (RUNWAY.width / 2 + 4), y: RUNWAY.groundY + 1.6, z: RUNWAY.centreZ + dz,
+          w: 3.4, h: 3.4, r: 1, g: 0.7, b: 0.33, a: 0.95,
+        });
+      }
+    }
+    return makeSpriteBuffer(items);
+  })();
+
+  // ---------- Dynamic flat geometry: thermal spirals and gulls ----------
+  const flatLoc = {
+    aPos: gl.getAttribLocation(flatProg, "aPos"),
+    aColor: gl.getAttribLocation(flatProg, "aColor"),
+    uMVP: gl.getUniformLocation(flatProg, "uMVP"),
+  };
+  const dynPos = gl.createBuffer();
+  const dynCol = gl.createBuffer();
+  function drawDynamic(positions, colors, mode, mvp) {
+    gl.useProgram(flatProg);
+    gl.bindBuffer(gl.ARRAY_BUFFER, dynPos);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(flatLoc.aPos);
+    gl.vertexAttribPointer(flatLoc.aPos, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, dynCol);
+    gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(flatLoc.aColor);
+    gl.vertexAttribPointer(flatLoc.aColor, 4, gl.FLOAT, false, 0, 0);
+    gl.uniformMatrix4fv(flatLoc.uMVP, false, mvp);
+    gl.drawArrays(mode, 0, positions.length / 3);
+  }
+
+  // ---------- Camera, same maths as the old projector ----------
   function cameraFor(glider, view) {
     const fwdX = Math.sin(glider.heading) * Math.cos(glider.pitch);
     const fwdZ = -Math.cos(glider.heading) * Math.cos(glider.pitch);
@@ -44,7 +590,6 @@ export function createRenderer(canvas) {
     if (view === "cockpit") {
       return { x: glider.x, y: glider.y + 1.2, z: glider.z, fwdX, fwdY, fwdZ, roll: glider.roll * 0.55 };
     }
-    // Chase: behind and above, looking past the glider.
     return {
       x: glider.x - fwdX * 30,
       y: glider.y + 10 - fwdY * 30,
@@ -54,672 +599,287 @@ export function createRenderer(canvas) {
     };
   }
 
-  function makeProjector(cam) {
-    // Right and up vectors, with cockpit roll applied to the frame.
-    let rightX = -cam.fwdZ;
-    let rightZ = cam.fwdX;
-    const rightLen = Math.hypot(rightX, rightZ) || 1;
-    rightX /= rightLen;
-    rightZ /= rightLen;
-    // up = right x forward, component by component:
-    // (ry*fz - rz*fy, rz*fx - rx*fz, rx*fy - ry*fx) with ry = 0.
-    let upX = -rightZ * cam.fwdY;
-    let upY = rightZ * cam.fwdX - rightX * cam.fwdZ;
-    let upZ = rightX * cam.fwdY;
-    // Apply roll around the forward axis.
-    const cr = Math.cos(cam.roll || 0);
-    const sr = Math.sin(cam.roll || 0);
-    const rX = rightX * cr + upX * sr;
-    const rY = upY * sr;
-    const rZ = rightZ * cr + upZ * sr;
-    const uX = upX * cr - rightX * sr;
-    const uY = upY * cr;
-    const uZ = upZ * cr - rightZ * sr;
-    const focal = H * 0.92;
-    return function project(x, y, z) {
-      const dx = x - cam.x;
-      const dy = y - cam.y;
-      const dz = z - cam.z;
-      const depth = dx * cam.fwdX + dy * cam.fwdY + dz * cam.fwdZ;
-      if (depth < 2) return null;
-      const px = dx * rX + dy * rY + dz * rZ;
-      const py = dx * uX + dy * uY + dz * uZ;
-      return {
-        x: W / 2 + (px / depth) * focal,
-        y: H / 2 - (py / depth) * focal,
-        depth,
-        scale: focal / depth,
-      };
-    };
+  function cameraBasis(cam) {
+    let rx = -cam.fwdZ, rz = cam.fwdX;
+    const rl = Math.hypot(rx, rz) || 1;
+    rx /= rl; rz /= rl;
+    const ux0 = -rz * cam.fwdY;
+    const uy0 = rz * cam.fwdX - rx * cam.fwdZ;
+    const uz0 = rx * cam.fwdY;
+    const cr = Math.cos(cam.roll || 0), sr = Math.sin(cam.roll || 0);
+    const right = [rx * cr + ux0 * sr, uy0 * sr, rz * cr + uz0 * sr];
+    const up = [ux0 * cr - rx * sr, uy0 * cr, uz0 * cr - rz * sr];
+    return { right, up, fwd: [cam.fwdX, cam.fwdY, cam.fwdZ] };
   }
 
-  function drawSky(palette, time, heading = 0) {
-    const grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, rgb(palette.sky));
-    grad.addColorStop(0.55, rgb(palette.horizon));
-    grad.addColorStop(1, rgb(palette.fog));
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
-    drawSun(palette, heading);
-    if (palette.aurora > 0.05 || palette.sun < 0.3) drawStars(palette, time);
-    if (palette.aurora > 0) drawAurora(palette.aurora, time);
-    drawClouds(palette, time, heading);
+  function basisFromHeadingPitchRoll(heading, pitch, roll) {
+    const fx = Math.sin(heading) * Math.cos(pitch);
+    const fz = -Math.cos(heading) * Math.cos(pitch);
+    const fy = Math.sin(pitch);
+    let rx = -fz, rz = fx;
+    const rl = Math.hypot(rx, rz) || 1;
+    rx /= rl; rz /= rl;
+    const ux0 = -rz * fy;
+    const uy0 = rz * fx - rx * fz;
+    const uz0 = rx * fy;
+    const cr = Math.cos(roll), sr = Math.sin(roll);
+    const right = [rx * cr + ux0 * sr, uy0 * sr, rz * cr + uz0 * sr];
+    const up = [ux0 * cr - rx * sr, uy0 * cr, uz0 * cr - rz * sr];
+    return { right, up, fwd: [fx, fy, fz] };
   }
 
-  // The low arctic sun: a disc with a halo that slides toward the horizon
-  // and warms as the day fades. Its screen position follows the heading, so
-  // turning the glider visibly turns the light.
-  function drawSun(palette, heading) {
-    if (palette.sun < 0.12) return;
-    // Sun sits in the south-west; heading 0 (north) puts it left-of-frame.
-    const sunBearing = 3.84; // radians, fixed in the world
-    let rel = sunBearing - heading;
-    while (rel > Math.PI) rel -= Math.PI * 2;
-    while (rel < -Math.PI) rel += Math.PI * 2;
-    if (Math.abs(rel) > 1.5) return;
-    const sx = W / 2 + rel * W * 0.42;
-    const sy = H * (0.52 - palette.sun * 0.3);
-    const r = 26 + palette.sun * 10;
-    const halo = ctx.createRadialGradient(sx, sy, r * 0.4, sx, sy, r * 5.2);
-    halo.addColorStop(0, `rgba(255,214,140,${0.5 * palette.sun})`);
-    halo.addColorStop(1, "rgba(255,190,110,0)");
-    ctx.fillStyle = halo;
-    ctx.fillRect(sx - r * 5.2, sy - r * 5.2, r * 10.4, r * 10.4);
-    ctx.fillStyle = `rgba(255,232,170,${0.55 + palette.sun * 0.4})`;
-    ctx.beginPath();
-    ctx.arc(sx, sy, r, 0, Math.PI * 2);
-    ctx.fill();
+  function sunDirection(dayPhase) {
+    const az = -0.85 + dayPhase * 3.2;
+    const el = Math.max(0.04, 0.55 - dayPhase * 0.62);
+    const ce = Math.cos(el);
+    return [Math.sin(az) * ce, Math.sin(el), -Math.cos(az) * ce];
   }
 
-  function drawStars(palette, time) {
-    const alpha = clamp(0.25 - palette.sun, 0, 0.85);
-    if (alpha <= 0.02) return;
-    ctx.save();
-    for (let i = 0; i < 110; i++) {
-      // Deterministic star field from the index alone.
-      const sx = ((i * 613) % 997) / 997 * W;
-      const sy = ((i * 389) % 613) / 613 * H * 0.5;
-      const tw = 0.6 + 0.4 * Math.sin(time * (1 + (i % 5) * 0.3) + i);
-      ctx.fillStyle = `rgba(230,240,255,${alpha * tw})`;
-      ctx.fillRect(sx, sy, i % 7 === 0 ? 2.2 : 1.3, i % 7 === 0 ? 2.2 : 1.3);
-    }
-    ctx.restore();
-  }
+  // ---------- The frame ----------
+  function draw(snapshot) {
+    const { glider, sky, rings, activeRing, view, time, dropZone } = snapshot;
+    const palette = skyPalette(sky.dayPhase);
+    const cam = cameraFor(glider, view);
+    const basis = cameraBasis(cam);
+    const aspect = W / Math.max(1, H);
+    const tanF = 0.5 / 0.92;
+    const proj = mat4Perspective(2 * Math.atan(tanF), aspect, 1.5, 12000);
+    const viewM = mat4View(cam.x, cam.y, cam.z,
+      basis.right[0], basis.right[1], basis.right[2],
+      basis.up[0], basis.up[1], basis.up[2],
+      basis.fwd[0], basis.fwd[1], basis.fwd[2]);
+    const viewProj = mat4Multiply(proj, viewM);
+    const identity = mat4Identity();
+    const sunDir = sunDirection(sky.dayPhase);
+    const sunI = palette.sun;
+    const fog = rgb255(palette.fog);
+    const sunTint = [1.0, 0.72 + 0.24 * sunDir[1], 0.45 + 0.4 * sunDir[1]];
+    const sunColor = [sunTint[0] * (0.2 + 1.0 * sunI), sunTint[1] * (0.2 + 1.0 * sunI), sunTint[2] * (0.2 + 1.0 * sunI)];
+    const ambient = [
+      0.17 + 0.4 * sunI, 0.2 + 0.37 * sunI, 0.3 + 0.27 * sunI,
+    ];
 
-  // Slow cloud puffs at screen parallax: they drift against the heading so
-  // the world feels deep even before the terrain fills the frame.
-  function drawClouds(palette, time, heading) {
-    ctx.save();
-    const dark = palette.sun < 0.4;
-    for (let i = 0; i < 9; i++) {
-      const baseX = ((i * 331) % 1200) / 1200;
-      const drift = ((time * 0.004 * (1 + (i % 3) * 0.4)) + heading * -0.06) % 1.3;
-      let cx = (baseX + drift) * W - W * 0.15;
-      if (cx > W + 160) cx -= W + 320;
-      const cy = H * (0.08 + ((i * 197) % 300) / 300 * 0.26);
-      const s = 46 + (i % 4) * 26;
-      ctx.fillStyle = dark ? `rgba(30,42,64,0.3)` : `rgba(255,252,246,${0.1 + palette.sun * 0.1})`;
-      for (const [ox, oy, os] of [[0, 0, 1], [-0.7, 0.16, 0.66], [0.72, 0.14, 0.72], [0.1, -0.22, 0.6]]) {
-        ctx.beginPath();
-        ctx.ellipse(cx + ox * s, cy + oy * s, s * os, s * os * 0.36, 0, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-    ctx.restore();
-  }
+    gl.clearColor(fog[0], fog[1], fog[2], 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
 
-  function drawAurora(strength, time) {
-    ctx.save();
-    ctx.globalAlpha = 0.34 * strength;
-    for (let band = 0; band < 3; band++) {
-      const baseY = H * (0.06 + band * 0.07);
-      const grad = ctx.createLinearGradient(0, baseY, 0, baseY + H * 0.16);
-      const colours = ["rgba(64,255,170,0.55)", "rgba(64,200,255,0.35)", "rgba(170,110,255,0.30)"];
-      grad.addColorStop(0, "rgba(0,0,0,0)");
-      grad.addColorStop(0.5, colours[band]);
-      grad.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.moveTo(0, baseY + H * 0.16);
-      for (let x = 0; x <= W; x += 24) {
-        const y = baseY + Math.sin(x * 0.006 + time * 0.35 + band * 1.7) * 16 + Math.sin(x * 0.017 - time * 0.2) * 7;
-        ctx.lineTo(x, y);
-      }
-      ctx.lineTo(W, baseY + H * 0.16);
-      ctx.closePath();
-      ctx.fill();
-    }
-    ctx.restore();
-  }
+    // Sky dome (drawn as a fullscreen triangle at the far plane).
+    gl.useProgram(skyProg);
+    gl.depthMask(false);
+    gl.bindBuffer(gl.ARRAY_BUFFER, skyBuf);
+    gl.enableVertexAttribArray(skyLoc.aNDC);
+    gl.vertexAttribPointer(skyLoc.aNDC, 2, gl.FLOAT, false, 0, 0);
+    gl.uniform3f(skyLoc.uRight, basis.right[0], basis.right[1], basis.right[2]);
+    gl.uniform3f(skyLoc.uUp, basis.up[0], basis.up[1], basis.up[2]);
+    gl.uniform3f(skyLoc.uFwd, basis.fwd[0], basis.fwd[1], basis.fwd[2]);
+    gl.uniform1f(skyLoc.uTanF, tanF);
+    gl.uniform1f(skyLoc.uAspect, aspect);
+    const top = rgb255(palette.sky), hor = rgb255(palette.horizon);
+    gl.uniform3f(skyLoc.uTop, top[0], top[1], top[2]);
+    gl.uniform3f(skyLoc.uHorizon, hor[0], hor[1], hor[2]);
+    gl.uniform3f(skyLoc.uFog, fog[0], fog[1], fog[2]);
+    gl.uniform3f(skyLoc.uSunDir, sunDir[0], sunDir[1], sunDir[2]);
+    gl.uniform3f(skyLoc.uSunTint, sunTint[0], sunTint[1], sunTint[2]);
+    gl.uniform1f(skyLoc.uSunI, sunI);
+    gl.uniform1f(skyLoc.uAurora, palette.aurora);
+    gl.uniform1f(skyLoc.uTime, time);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.depthMask(true);
 
-  function drawTerrain(cam, project, palette, time = 0) {
-    const fwdFlatX = cam.fwdX;
-    const fwdFlatZ = cam.fwdZ;
-    const len = Math.hypot(fwdFlatX, fwdFlatZ) || 1;
-    const fx = fwdFlatX / len;
-    const fz = fwdFlatZ / len;
-    const rx = -fz;
-    const rz = fx;
-    // Vertex grid in world space.
-    const rows = FORWARD_STEPS.length;
-    const cols = LATERAL_STEPS.length;
-    const verts = [];
-    for (let i = 0; i < rows; i++) {
-      const row = [];
-      for (let j = 0; j < cols; j++) {
-        const wx = cam.x + fx * FORWARD_STEPS[i] + rx * LATERAL_STEPS[j];
-        const wz = cam.z + fz * FORWARD_STEPS[i] + rz * LATERAL_STEPS[j];
-        const wy = Math.abs(wx) > WORLD_HALF || Math.abs(wz) > WORLD_HALF ? -12 : terrainHeight(wx, wz);
-        row.push({ wx, wy, wz, p: project(wx, wy, wz), col: null });
-      }
-      verts.push(row);
-    }
-    // Per-vertex colour: a continuous colour ramp shaded by the local height
-    // gradient and blended into the fog by the vertex's own depth. Triangles
-    // then average their three corner colours, which is what makes the
-    // ground read as one smooth landscape instead of flat slabs.
-    for (let i = 0; i < rows; i++) {
-      for (let j = 0; j < cols; j++) {
-        const v = verts[i][j];
-        const iPrev = Math.max(0, i - 1);
-        const iNext = Math.min(rows - 1, i + 1);
-        const jPrev = Math.max(0, j - 1);
-        const jNext = Math.min(cols - 1, j + 1);
-        const dF = (verts[iNext][j].wy - verts[iPrev][j].wy) / (FORWARD_STEPS[iNext] - FORWARD_STEPS[iPrev] || 1);
-        const dR = (verts[i][jNext].wy - verts[i][jPrev].wy) / (LATERAL_STEPS[jNext] - LATERAL_STEPS[jPrev] || 1);
-        const slope = Math.hypot(dF, dR);
-        let shade = clamp(1 - dF * 0.55 - dR * 0.25, 0.62, 1.22);
-        shade += (treeHash(Math.round(v.wx / 90), Math.round(v.wz / 90)) - 0.5) * 0.045;
-        // Open water catches the light: a slow travelling shimmer.
-        if (v.wy < 1.5) {
-          shade *= 1 + 0.09 * Math.sin(time * 1.2 + (v.wx * 0.011 + v.wz * 0.017));
-        }
-        const base = terrainColorAt(v.wx, v.wz, v.wy, slope);
-        const fogT = v.p ? clamp((v.p.depth - 380) / 5000, 0, 0.88) : 0.88;
-        v.col = blendCol(shadeCol(base, shade), palette.fog, fogT);
-      }
-    }
-    // Painter's order: far rows first. Near and mid triangles are filled
-    // with a linear gradient from one corner to the midpoint of the opposite
-    // edge (a cheap Gouraud approximation): because neighbouring triangles
-    // share corner colours, the ground shades continuously across edges
-    // instead of stepping from slab to slab. Far triangles sit under heavy
-    // fog, so they take a flat average fill and save the gradient cost.
-    function tri(p1, p2, p3) {
-      const depth = (p1.p.depth + p2.p.depth + p3.p.depth) / 3;
-      if (depth > 2600) {
-        ctx.fillStyle = rgb([
-          (p1.col[0] + p2.col[0] + p3.col[0]) / 3,
-          (p1.col[1] + p2.col[1] + p3.col[1]) / 3,
-          (p1.col[2] + p2.col[2] + p3.col[2]) / 3,
-        ]);
-      } else {
-        const mx = (p2.p.x + p3.p.x) / 2;
-        const my = (p2.p.y + p3.p.y) / 2;
-        const grad = ctx.createLinearGradient(p1.p.x, p1.p.y, mx, my);
-        grad.addColorStop(0, rgb(p1.col));
-        grad.addColorStop(1, rgb([
-          (p2.col[0] + p3.col[0]) / 2,
-          (p2.col[1] + p3.col[1]) / 2,
-          (p2.col[2] + p3.col[2]) / 2,
-        ]));
-        ctx.fillStyle = grad;
-      }
-      ctx.beginPath();
-      ctx.moveTo(p1.p.x, p1.p.y);
-      ctx.lineTo(p2.p.x, p2.p.y);
-      ctx.lineTo(p3.p.x, p3.p.y);
-      ctx.closePath();
-      ctx.fill();
-    }
-    for (let i = rows - 2; i >= 0; i--) {
-      for (let j = 0; j < cols - 1; j++) {
-        const a = verts[i][j];
-        const b = verts[i][j + 1];
-        const c = verts[i + 1][j + 1];
-        const d = verts[i + 1][j];
-        if (!a.p || !b.p || !c.p || !d.p) continue;
-        tri(a, b, c);
-        tri(a, c, d);
-      }
-    }
-  }
+    // Lit world.
+    gl.useProgram(litProg);
+    gl.uniform3f(lit.uSunDir, sunDir[0], sunDir[1], sunDir[2]);
+    gl.uniform3f(lit.uSunColor, sunColor[0], sunColor[1], sunColor[2]);
+    gl.uniform3f(lit.uAmbient, ambient[0], ambient[1], ambient[2]);
+    gl.uniform3f(lit.uFogColor, fog[0], fog[1], fog[2]);
+    gl.uniform3f(lit.uCamPos, cam.x, cam.y, cam.z);
+    gl.uniform1f(lit.uTime, time);
 
-  // Pine forest: deterministic trees scattered by a cell hash, drawn only
-  // near the camera where they read as individual trees, not texture.
-  function treeHash(ix, iz) {
-    let n = ix * 2246822519 + iz * 3266489917;
-    n = (n ^ (n >> 15)) * 2654435761;
-    return (((n ^ (n >> 13)) >>> 0) % 1000) / 1000;
-  }
+    drawMesh(terrainMesh, viewProj, identity);
+    drawMesh(forestMesh, viewProj, identity);
+    drawMesh(villageMesh, viewProj, identity);
+    drawMesh(windowsMesh, viewProj, identity, { emissive: clamp(0.85 - palette.sun, 0, 0.8) });
+    drawMesh(runwayMesh, viewProj, identity);
+    drawMesh(lighthouseMesh, viewProj, identity);
+    drawMesh(lampMesh, viewProj, identity, { emissive: 0.35 + palette.aurora * 0.9 });
 
-  function drawTrees(project, cam) {
-    const cell = 150;
-    const fwdLen = Math.hypot(cam.fwdX, cam.fwdZ) || 1;
-    const fx = cam.fwdX / fwdLen;
-    const fz = cam.fwdZ / fwdLen;
-    const rx = -fz;
-    const rz = fx;
-    for (let df = 120; df < 2100; df += cell) {
-      for (let dl = -1500; dl <= 1500; dl += cell) {
-        const wx = cam.x + fx * df + rx * dl;
-        const wz = cam.z + fz * df + rz * dl;
-        const ix = Math.round(wx / cell);
-        const iz = Math.round(wz / cell);
-        if (treeHash(ix, iz) > 0.34) continue;
-        const jx = wx + (treeHash(ix + 40, iz) - 0.5) * 80;
-        const jz = wz + (treeHash(ix, iz + 40) - 0.5) * 80;
-        const gy = terrainHeight(jx, jz);
-        if (gy < 18 || gy > 215) continue;
-        const treeSurface = surfaceAt(jx, jz, gy);
-        if (treeSurface !== "snow" && treeSurface !== "shore" && treeSurface !== "tundra") continue;
-        const base = project(jx, gy, jz);
-        const top = project(jx, gy + 17, jz);
-        if (!base || !top || base.depth > 2100) continue;
-        const s = base.scale;
-        const wHalf = Math.max(1.6, 5.2 * s * 0.14);
-        const trunkH = (base.y - top.y) * 0.24;
-        ctx.strokeStyle = "#4a3826";
-        ctx.lineWidth = Math.max(1, s * 0.16);
-        ctx.beginPath();
-        ctx.moveTo(base.x, base.y);
-        ctx.lineTo(base.x, base.y - trunkH);
-        ctx.stroke();
-        ctx.fillStyle = "#22483a";
-        for (let tier = 0; tier < 2; tier++) {
-          const ty = base.y - trunkH - (base.y - top.y - trunkH) * (tier * 0.42);
-          const tw = wHalf * (1 - tier * 0.34);
-          ctx.beginPath();
-          ctx.moveTo(base.x - tw, ty);
-          ctx.lineTo(base.x, ty - (base.y - top.y) * 0.52);
-          ctx.lineTo(base.x + tw, ty);
-          ctx.closePath();
-          ctx.fill();
-        }
-        // A cap of snow on the crown.
-        ctx.fillStyle = "rgba(240,246,250,0.85)";
-        ctx.beginPath();
-        ctx.moveTo(base.x - wHalf * 0.2, top.y + (base.y - top.y) * 0.1);
-        ctx.lineTo(base.x, top.y);
-        ctx.lineTo(base.x + wHalf * 0.2, top.y + (base.y - top.y) * 0.1);
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
-  }
-
-  function drawRunway(project, palette) {
-    const { centreX, centreZ, length, width, groundY } = RUNWAY;
-    const corners = [
-      [centreX - width / 2, centreZ - length / 2],
-      [centreX + width / 2, centreZ - length / 2],
-      [centreX + width / 2, centreZ + length / 2],
-      [centreX - width / 2, centreZ + length / 2],
-    ].map(([x, z]) => project(x, groundY + 0.4, z));
-    if (corners.some((p) => !p)) return;
-    ctx.fillStyle = "rgba(196,214,224,0.95)";
-    ctx.beginPath();
-    ctx.moveTo(corners[0].x, corners[0].y);
-    for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = "rgba(240,248,252,0.9)";
-    ctx.lineWidth = 2;
-    // Centreline dashes.
-    for (let i = -4; i < 5; i++) {
-      const z0 = centreZ + i * 62;
-      const p1 = project(centreX, groundY + 0.5, z0);
-      const p2 = project(centreX, groundY + 0.5, z0 + 30);
-      if (!p1 || !p2) continue;
-      ctx.beginPath();
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p2.x, p2.y);
-      ctx.stroke();
-    }
-    // Edge lights: amber dots down both sides, lit as the light fades.
-    const glow = clamp(1.15 - palette.sun, 0.15, 1);
-    for (let dz = -length / 2 + 30; dz < length / 2; dz += 78) {
-      for (const side of [-1, 1]) {
-        const p = project(centreX + side * (width / 2 + 4), groundY + 1.2, centreZ + dz);
-        if (!p || p.depth > 2400) continue;
-        ctx.fillStyle = `rgba(255,178,84,${glow})`;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, Math.max(1.4, p.scale * 0.32), 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-    // Threshold bar at the landing (south) end.
-    const t1 = project(centreX - width / 2 + 3, groundY + 0.5, centreZ + length / 2 - 14);
-    const t2 = project(centreX + width / 2 - 3, groundY + 0.5, centreZ + length / 2 - 14);
-    if (t1 && t2) {
-      ctx.strokeStyle = "#ffcf4d";
-      ctx.lineWidth = Math.max(2, t1.scale * 1.4);
-      ctx.beginPath();
-      ctx.moveTo(t1.x, t1.y);
-      ctx.lineTo(t2.x, t2.y);
-      ctx.stroke();
-    }
-  }
-
-  function drawVillage(project, palette) {
-    for (let i = 0; i < VILLAGE.houses; i++) {
-      const hx = VILLAGE.x + ((i * 67) % 220) - 110;
-      const hz = VILLAGE.z + ((i * 113) % 200) - 100;
-      const gy = terrainHeight(hx, hz);
-      drawBox(project, hx, gy, hz, 16, 9, 13, i % 3 === 0 ? "#b5502e" : "#7a4a34", "#e8e2d4", palette);
-    }
-  }
-
-  function drawBox(project, x, groundY, z, w, h, d, wall, roof, palette) {
-    const top = project(x, groundY + h, z);
-    const base = project(x, groundY, z);
-    if (!top || !base || base.depth > 2600) return;
-    const s = base.scale;
-    ctx.fillStyle = wall;
-    ctx.fillRect(base.x - (w / 2) * s * 0.14, top.y, w * s * 0.14, base.y - top.y);
-    ctx.fillStyle = roof;
-    ctx.beginPath();
-    ctx.moveTo(base.x - (w / 2 + 2) * s * 0.14, top.y + 2);
-    ctx.lineTo(base.x, top.y - h * s * 0.07);
-    ctx.lineTo(base.x + (w / 2 + 2) * s * 0.14, top.y + 2);
-    ctx.closePath();
-    ctx.fill();
-    // Lit windows once the light goes: Port Svarra is inhabited.
-    if (palette && palette.sun < 0.62 && base.depth < 1500) {
-      ctx.fillStyle = `rgba(255,196,96,${clamp(0.75 - palette.sun, 0.2, 0.75)})`;
-      const winW = Math.max(1.2, s * 0.3);
-      ctx.fillRect(base.x - w * s * 0.05, top.y + (base.y - top.y) * 0.45, winW, winW);
-      ctx.fillRect(base.x + w * s * 0.03, top.y + (base.y - top.y) * 0.55, winW, winW);
-    }
-  }
-
-  function drawLighthouse(project, palette, time) {
-    const gy = terrainHeight(LIGHTHOUSE.x, LIGHTHOUSE.z);
-    const base = project(LIGHTHOUSE.x, gy, LIGHTHOUSE.z);
-    const top = project(LIGHTHOUSE.x, gy + 44, LIGHTHOUSE.z);
-    if (!base || !top || base.depth > 4200) return;
-    const s = base.scale;
-    ctx.fillStyle = "#e8e4da";
-    ctx.fillRect(base.x - 3.2 * s * 0.14, top.y, 6.4 * s * 0.14, base.y - top.y);
-    ctx.fillStyle = "#c33d2a";
-    ctx.fillRect(base.x - 3.2 * s * 0.14, top.y + (base.y - top.y) * 0.4, 6.4 * s * 0.14, (base.y - top.y) * 0.16);
-    const lampGlow = 0.35 + palette.aurora;
-    ctx.fillStyle = `rgba(255,214,110,${lampGlow})`;
-    ctx.beginPath();
-    ctx.arc(top.x, top.y, Math.max(2.5, 3.4 * s * 0.14), 0, Math.PI * 2);
-    ctx.fill();
+    // Lighthouse beam, sweeping once the aurora is up.
     if (palette.aurora > 0.25) {
-      const sweep = Math.sin(time * 0.7) * 0.5 + 0.5;
-      ctx.fillStyle = `rgba(255,224,140,${0.10 + sweep * 0.08})`;
-      ctx.beginPath();
-      ctx.moveTo(top.x, top.y);
-      ctx.lineTo(top.x + 340, top.y + 26 + sweep * 30);
-      ctx.lineTo(top.x + 340, top.y - 20);
-      ctx.closePath();
-      ctx.fill();
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+      gl.depthMask(false);
+      const sweep = time * 0.7;
+      const beamModel = mat4Model(
+        LIGHTHOUSE.x, lightBase + 43, LIGHTHOUSE.z,
+        Math.cos(sweep), 0, -Math.sin(sweep), 0, 1, 0, Math.sin(sweep), 0, Math.cos(sweep),
+      );
+      drawMesh(beamMesh, mat4Multiply(viewProj, beamModel), beamModel, { emissive: 1.4, alpha: 0.13 + 0.06 * Math.sin(time * 0.7) });
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
     }
-  }
 
-  function drawThermalSpirals(project, sky, time) {
-    for (const t of sky.thermals) {
-      if (!t.currentLift || t.currentLift < 0.7) continue;
-      const ground = terrainHeight(t.x, t.z);
-      ctx.save();
-      for (let i = 0; i < 14; i++) {
-        const frac = (i / 14 + (time * 0.14) % (1 / 14)) % 1;
-        const ang = frac * Math.PI * 5 + t.driftPhase;
-        const rad = t.radius * 0.34 * (0.4 + frac * 0.6);
-        const px = t.x + Math.cos(ang) * rad;
-        const pz = t.z + Math.sin(ang) * rad;
-        const py = ground + 12 + frac * 330;
-        const p = project(px, py, pz);
-        if (!p || p.depth > 3800) continue;
-        const alpha = 0.16 * (1 - frac) * clamp(t.currentLift / 3.4, 0.3, 1);
-        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, Math.max(1.6, p.scale * 2.6), 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
+    // Drop zone: a glowing band and a faint disc on the ground.
+    const zone = dropZone || (snapshot.mission && snapshot.mission.objective === "drop" ? snapshot.mission.dropZone : null);
+    if (zone) {
+      const gy = terrainHeight(zone.x, zone.z);
+      const zm = mat4Model(zone.x, gy + 1.6, zone.z, 1, 0, 0, 0, 1, 0, 0, 0, 1, zone.radius);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+      drawMesh(ringBandMesh, mat4Multiply(viewProj, zm), zm, { emissive: 0.5, alpha: 0.95 });
+      drawMesh(discMesh, mat4Multiply(viewProj, zm), zm, { emissive: 0.3, alpha: 0.16 });
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
     }
-  }
 
-  function drawBirds(project, sky, glider, time) {
-    for (const flock of sky.birds) {
-      const t = sky.thermals[flock.thermalSlot % sky.thermals.length];
-      if (!t || !t.currentLift || t.currentLift < 1.4) continue;
-      const ground = terrainHeight(t.x, t.z);
-      for (let i = 0; i < flock.birds; i++) {
-        const ang = flock.phase + time * 0.45 + (i * Math.PI * 2) / flock.birds;
-        const bx = t.x + Math.cos(ang) * flock.radius;
-        const bz = t.z + Math.sin(ang) * flock.radius;
-        const by = ground + flock.height + Math.sin(time * 1.3 + i) * 5;
-        const p = project(bx, by, bz);
-        if (!p || p.depth > 2400) continue;
-        const w = Math.max(2.4, p.scale * 1.5);
-        const flap = Math.sin(time * 6 + i * 1.4) * w * 0.45;
-        ctx.strokeStyle = "rgba(30,36,44,0.85)";
-        ctx.lineWidth = Math.max(1, w * 0.22);
-        ctx.beginPath();
-        ctx.moveTo(p.x - w, p.y - flap);
-        ctx.lineTo(p.x, p.y);
-        ctx.lineTo(p.x + w, p.y - flap);
-        ctx.stroke();
-      }
-    }
-  }
-
-  function drawRings(project, rings, activeIndex, time, aurora) {
+    // Checkpoint rings, billboarded so they always read as gates.
     for (let i = rings.length - 1; i >= 0; i--) {
       const r = rings[i];
       if (r.passed) continue;
-      const p = project(r.x, r.y, r.z);
-      if (!p) continue;
-      const radiusPx = r.radius * p.scale;
-      if (radiusPx < 3 || radiusPx > W) continue;
-      const active = i === activeIndex;
+      const active = i === activeRing;
       const pulse = active ? 1 + Math.sin(time * 4) * 0.05 : 1;
-      ctx.save();
-      ctx.lineWidth = Math.max(2.5, radiusPx * 0.09);
-      ctx.strokeStyle = active ? "#ffcf4d" : "rgba(150,210,235,0.75)";
-      if (active || aurora > 0.3) {
-        ctx.shadowColor = active ? "rgba(255,190,60,0.9)" : "rgba(120,220,255,0.7)";
-        ctx.shadowBlur = 16;
+      const scale = r.radius * pulse;
+      const rm = mat4Model(r.x, r.y, r.z,
+        basis.right[0], basis.right[1], basis.right[2],
+        basis.up[0], basis.up[1], basis.up[2],
+        -basis.fwd[0], -basis.fwd[1], -basis.fwd[2], scale);
+      const mvp = mat4Multiply(viewProj, rm);
+      if (active) {
+        drawMesh(torusMesh, mvp, rm, { emissive: 0.85, tint: [1.0, 0.76, 0.18] });
+      } else {
+        drawMesh(torusMesh, mvp, rm, { emissive: 0.25 + palette.aurora * 0.5, tint: [0.45, 0.78, 0.95] });
       }
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, radiusPx * pulse, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.lineWidth = Math.max(1.2, radiusPx * 0.03);
-      ctx.strokeStyle = "rgba(255,255,255,0.85)";
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, radiusPx * pulse * 0.86, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
+      const inner = mat4Model(r.x, r.y, r.z,
+        basis.right[0], basis.right[1], basis.right[2],
+        basis.up[0], basis.up[1], basis.up[2],
+        -basis.fwd[0], -basis.fwd[1], -basis.fwd[2], scale * 0.86);
+      drawMesh(torusMesh, mat4Multiply(viewProj, inner), inner, { emissive: 0.4 });
     }
-  }
 
-  function drawDropZone(project, zone) {
-    const gy = terrainHeight(zone.x, zone.z);
-    const p = project(zone.x, gy + 2, zone.z);
-    if (!p) return;
-    const radiusPx = zone.radius * p.scale;
-    if (radiusPx < 4) return;
-    ctx.save();
-    ctx.strokeStyle = "#ff9d4d";
-    ctx.lineWidth = Math.max(2, radiusPx * 0.06);
-    ctx.beginPath();
-    ctx.ellipse(p.x, p.y, radiusPx, radiusPx * 0.36, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillStyle = "rgba(255,157,77,0.16)";
-    ctx.fill();
-    ctx.restore();
-  }
+    // Glider shadow: a soft dark disc on the ground below.
+    {
+      const gy = terrainHeight(glider.x, glider.z);
+      const gap = glider.y - gy;
+      if (gap > 0 && gap < 260) {
+        const shrink = clamp(1 - gap / 300, 0.25, 1);
+        const sm = mat4Model(glider.x, gy + 0.7, glider.z, 1, 0, 0, 0, 1, 0, 0, 0, 1, 10.5 * shrink + 2);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthMask(false);
+        drawMesh(discMesh, mat4Multiply(viewProj, sm), sm, { alpha: 0.34 * shrink, tint: [0.04, 0.05, 0.07] });
+        gl.depthMask(true);
+        gl.disable(gl.BLEND);
+      }
+    }
 
-  function drawGliderChase(glider, time) {
-    // The glider sits centre-frame, banking with its roll, sinking/rising a
-    // touch with vertical speed so the picture always shows flight. It is
-    // drawn like a small scale model: tapered wings with panel lines and
-    // tip stripes, a shaded fuselage with a spine highlight, a glass canopy
-    // with the pilot's helmet inside, and a T-tail.
-    const cx = W / 2;
-    const cy = H * 0.56 + clamp(-glider.verticalSpeed * 2.2, -14, 18);
-    const s = Math.min(W, H) / 470;
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(glider.roll * 0.9);
-    // Wing flex: the tips rise a touch under load in a turn.
-    const flex = clamp(Math.abs(glider.roll) * 7, 0, 5) * s;
-    const wingGrad = (flip) => {
-      const g = ctx.createLinearGradient(0, 0, flip * 128 * s, 0);
-      g.addColorStop(0, "#f2703d");
-      g.addColorStop(0.75, "#e85d2f");
-      g.addColorStop(1, "#d34e24");
-      return g;
-    };
-    for (const flip of [-1, 1]) {
-      // Main wing: swept, tapered, with a paler top sheen.
-      ctx.fillStyle = wingGrad(flip);
-      ctx.beginPath();
-      ctx.moveTo(flip * 5 * s, -3 * s);
-      ctx.lineTo(flip * 124 * s, 7 * s - flex);
-      ctx.lineTo(flip * 128 * s, 15 * s - flex);
-      ctx.lineTo(flip * 7 * s, 9 * s);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = "rgba(255,214,170,0.35)";
-      ctx.beginPath();
-      ctx.moveTo(flip * 5 * s, -3 * s);
-      ctx.lineTo(flip * 124 * s, 7 * s - flex);
-      ctx.lineTo(flip * 126 * s, 10 * s - flex);
-      ctx.lineTo(flip * 6 * s, 1 * s);
-      ctx.closePath();
-      ctx.fill();
-      // Aileron split line and the red tip band with its winglet.
-      ctx.strokeStyle = "rgba(120,40,16,0.55)";
-      ctx.lineWidth = Math.max(0.8, s * 0.8);
-      ctx.beginPath();
-      ctx.moveTo(flip * 92 * s, 5.4 * s - flex * 0.72);
-      ctx.lineTo(flip * 94 * s, 12.6 * s - flex * 0.72);
-      ctx.stroke();
-      ctx.fillStyle = "#b83a1e";
-      ctx.beginPath();
-      ctx.moveTo(flip * 112 * s, 6.2 * s - flex * 0.9);
-      ctx.lineTo(flip * 124 * s, 7 * s - flex);
-      ctx.lineTo(flip * 128 * s, 15 * s - flex);
-      ctx.lineTo(flip * 114 * s, 13.6 * s - flex * 0.9);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = "#8c2f1c";
-      ctx.beginPath();
-      ctx.moveTo(flip * 124 * s, 7 * s - flex);
-      ctx.lineTo(flip * 130 * s, -2 * s - flex);
-      ctx.lineTo(flip * 131 * s, 8 * s - flex);
-      ctx.closePath();
-      ctx.fill();
+    // The glider itself (chase view only; in cockpit you ARE the glider).
+    if (view !== "cockpit") {
+      const gb = basisFromHeadingPitchRoll(glider.heading, glider.pitch, glider.roll);
+      const gm = mat4Model(glider.x, glider.y, glider.z,
+        gb.right[0], gb.right[1], gb.right[2],
+        gb.up[0], gb.up[1], gb.up[2],
+        -gb.fwd[0], -gb.fwd[1], -gb.fwd[2]);
+      const mvp = mat4Multiply(viewProj, gm);
+      drawMesh(gliderMesh, mvp, gm);
+      drawMesh(canopyMesh, mvp, gm);
+      if (glider.airbrake) drawMesh(brakesMesh, mvp, gm);
+      drawMesh(navLightsMesh, mvp, gm, { emissive: 1.3 });
+      if (Math.sin(time * 2.4) > 0.72) drawMesh(strobeMesh, mvp, gm, { emissive: 1.6 });
     }
-    // Fuselage: shaded in three tones — lit spine, mid flank, dark belly.
-    const bodyGrad = ctx.createLinearGradient(0, -38 * s, 0, 30 * s);
-    bodyGrad.addColorStop(0, "#fff6e6");
-    bodyGrad.addColorStop(0.5, "#f6e5c4");
-    bodyGrad.addColorStop(1, "#cdb27f");
-    ctx.fillStyle = bodyGrad;
-    ctx.beginPath();
-    ctx.moveTo(0, -38 * s);
-    ctx.quadraticCurveTo(12 * s, -16 * s, 10.5 * s, 8 * s);
-    ctx.quadraticCurveTo(8.5 * s, 27 * s, 0, 33 * s);
-    ctx.quadraticCurveTo(-8.5 * s, 27 * s, -10.5 * s, 8 * s);
-    ctx.quadraticCurveTo(-12 * s, -16 * s, 0, -38 * s);
-    ctx.fill();
-    ctx.fillStyle = "rgba(120,90,40,0.25)";
-    ctx.beginPath();
-    ctx.moveTo(0, 33 * s);
-    ctx.quadraticCurveTo(-8.5 * s, 27 * s, -10.5 * s, 8 * s);
-    ctx.lineTo(-4 * s, 8 * s);
-    ctx.quadraticCurveTo(-4.5 * s, 24 * s, 0, 30 * s);
-    ctx.closePath();
-    ctx.fill();
-    // Spine highlight and two panel rings.
-    ctx.strokeStyle = "rgba(255,255,255,0.65)";
-    ctx.lineWidth = Math.max(0.8, s);
-    ctx.beginPath();
-    ctx.moveTo(0, -36 * s);
-    ctx.quadraticCurveTo(1.5 * s, -10 * s, 0, 26 * s);
-    ctx.stroke();
-    ctx.strokeStyle = "rgba(140,110,60,0.4)";
-    ctx.beginPath();
-    ctx.moveTo(-9.6 * s, 2 * s);
-    ctx.quadraticCurveTo(0, 5 * s, 9.6 * s, 2 * s);
-    ctx.stroke();
-    // T-tail: fin with a red tip, stabilizer shaded like the wings.
-    ctx.fillStyle = "#e85d2f";
-    ctx.fillRect(-24 * s, 24 * s, 48 * s, 5.5 * s);
-    ctx.fillStyle = "#f2703d";
-    ctx.fillRect(-3.4 * s, 6 * s, 6.8 * s, 20 * s);
-    ctx.fillStyle = "#b83a1e";
-    ctx.fillRect(-3.4 * s, 6 * s, 6.8 * s, 5 * s);
-    // Canopy: deep glass, a sky reflection, and the pilot's helmet inside.
-    const canGrad = ctx.createLinearGradient(0, -30 * s, 0, -2 * s);
-    canGrad.addColorStop(0, "#cfeefb");
-    canGrad.addColorStop(0.45, "#5f9ec2");
-    canGrad.addColorStop(1, "#2c5d7d");
-    ctx.fillStyle = canGrad;
-    ctx.beginPath();
-    ctx.ellipse(0, -16 * s, 7 * s, 13 * s, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#3a3f45";
-    ctx.beginPath();
-    ctx.arc(0, -13 * s, 3.6 * s, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "rgba(255,255,255,0.75)";
-    ctx.beginPath();
-    ctx.ellipse(-2.4 * s, -21 * s, 1.8 * s, 5 * s, -0.4, 0, Math.PI * 2);
-    ctx.fill();
-    // Airbrake panels, visible when open.
-    if (glider.airbrake) {
-      ctx.fillStyle = "#8c2f1c";
-      ctx.fillRect(-52 * s, 2 * s, 16 * s, 10 * s);
-      ctx.fillRect(36 * s, 2 * s, 16 * s, 10 * s);
-    }
-    // Navigation lights: red on the left tip, green on the right, and a
-    // white tail strobe that blinks — tiny, but they sell the dusk shots.
-    ctx.fillStyle = "#ff4444";
-    ctx.beginPath();
-    ctx.arc(-127 * s, 11 * s, 2.6 * s, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#3dff7a";
-    ctx.beginPath();
-    ctx.arc(127 * s, 11 * s, 2.6 * s, 0, Math.PI * 2);
-    ctx.fill();
-    if (Math.sin(time * 2.4) > 0.72) {
-      ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.beginPath();
-      ctx.arc(0, 29 * s, 2.2 * s, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-  }
 
-  // The glider's shadow on the snow below: the cheapest altitude cue there
-  // is, and the one real pilots land by.
-  function drawGliderShadow(project, glider) {
-    const gy = terrainHeight(glider.x, glider.z);
-    const gap = glider.y - gy;
-    if (gap > 260 || gap < 0) return;
-    const p = project(glider.x, gy + 1, glider.z);
-    if (!p) return;
-    const shrink = clamp(1 - gap / 300, 0.25, 1);
-    const rx = clamp(11 * p.scale * shrink, 4, 90);
-    ctx.fillStyle = `rgba(16,24,34,${0.32 * shrink})`;
-    ctx.beginPath();
-    ctx.ellipse(p.x, p.y, rx, rx * 0.26, 0, 0, Math.PI * 2);
-    ctx.fill();
+    // Thermal spirals: rising ribbons of light air.
+    {
+      const positions = [];
+      const colors = [];
+      for (const t of sky.thermals) {
+        if (!t.currentLift || t.currentLift < 0.7) continue;
+        const ground = terrainHeight(t.x, t.z);
+        const liftF = clamp(t.currentLift / 3.4, 0.3, 1);
+        let prev = null;
+        for (let i = 0; i <= 40; i++) {
+          const frac = i / 40;
+          const ang = frac * Math.PI * 5 + t.driftPhase + time * 0.9;
+          const rad = t.radius * 0.34 * (0.4 + frac * 0.6);
+          const px = t.x + Math.cos(ang) * rad;
+          const pz = t.z + Math.sin(ang) * rad;
+          const py = ground + 12 + frac * 330;
+          if (prev) {
+            positions.push(prev[0], prev[1], prev[2], px, py, pz);
+            const a = 0.34 * (1 - frac) * liftF;
+            colors.push(1, 1, 1, a, 1, 1, 1, a);
+          }
+          prev = [px, py, pz];
+        }
+      }
+      if (positions.length) {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthMask(false);
+        drawDynamic(new Float32Array(positions), new Float32Array(colors), gl.LINES, viewProj);
+        gl.depthMask(true);
+        gl.disable(gl.BLEND);
+      }
+    }
+
+    // Gulls circling inside the strong thermals.
+    {
+      const positions = [];
+      const colors = [];
+      for (const flock of sky.birds) {
+        const t = sky.thermals[flock.thermalSlot % sky.thermals.length];
+        if (!t || !t.currentLift || t.currentLift < 1.4) continue;
+        const ground = terrainHeight(t.x, t.z);
+        for (let i = 0; i < flock.birds; i++) {
+          const ang = flock.phase + time * 0.45 + (i * Math.PI * 2) / flock.birds;
+          const bx = t.x + Math.cos(ang) * flock.radius;
+          const bz = t.z + Math.sin(ang) * flock.radius;
+          const by = ground + flock.height + Math.sin(time * 1.3 + i) * 5;
+          const rad = [Math.cos(ang), 0, Math.sin(ang)];
+          const tan = [-Math.sin(ang), 0, Math.cos(ang)];
+          const w = 3.4;
+          const flap = Math.sin(time * 6 + i * 1.4) * 1.5;
+          const back = [bx - tan[0] * 0.9, by, bz - tan[2] * 0.9];
+          const front = [bx + tan[0] * 1.3, by, bz + tan[2] * 1.3];
+          const tipL = [bx - rad[0] * w, by + flap, bz - rad[2] * w];
+          const tipR = [bx + rad[0] * w, by + flap, bz + rad[2] * w];
+          positions.push(...back, ...tipL, ...front, ...back, ...front, ...tipR);
+          for (let k = 0; k < 6; k++) colors.push(0.12, 0.14, 0.17, 0.9);
+        }
+      }
+      if (positions.length) {
+        drawDynamic(new Float32Array(positions), new Float32Array(colors), gl.TRIANGLES, viewProj);
+      }
+    }
+
+    // Clouds drift with the wind; runway lights glow as the light fades.
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    const cloudTint = [
+      0.75 + 0.25 * sunI, 0.72 + 0.24 * sunI, 0.78 + 0.2 * sunI,
+      0.55 + 0.45 * sunI,
+    ];
+    drawSprites(cloudSprites, proj, viewM, basis.right, basis.up, cloudTint, time * 6, 1, fog);
+    const lightGlow = clamp(1.15 - palette.sun, 0.15, 1);
+    drawSprites(edgeLightSprites, proj, viewM, basis.right, basis.up, [1, 1, 1, lightGlow], 0, 0, fog);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+
+    // ---------- 2D overlay: cockpit, streaks, squall, vignette ----------
+    fx.clearRect(0, 0, W, H);
+    if (view === "cockpit") drawCockpit(glider, snapshot);
+    else drawSpeedStreaks(glider, time);
+    drawSnowSquallFx(sky, glider, time);
+    drawVignette();
+    return palette;
   }
 
   function drawSpeedStreaks(glider, time) {
     if (glider.speed < 25) return;
-    ctx.save();
-    ctx.strokeStyle = "rgba(240,248,255,0.32)";
-    ctx.lineWidth = 1.4;
+    fx.save();
+    fx.strokeStyle = "rgba(240,248,255,0.32)";
+    fx.lineWidth = 1.4;
     for (let i = 0; i < 14; i++) {
       const seed = (i * 271) % 997;
       const t = (time * (0.5 + glider.speed * 0.012) + seed / 997) % 1;
@@ -727,125 +887,121 @@ export function createRenderer(canvas) {
       const sx = W / 2 + edge * W * (0.3 + t * 0.24);
       const sy = H * (0.2 + ((seed * 7) % 500) / 500 * 0.6) + t * H * 0.1;
       const len = 12 + t * 30 * (glider.speed / 30);
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(sx + edge * len, sy + len * 0.24);
-      ctx.stroke();
+      fx.beginPath();
+      fx.moveTo(sx, sy);
+      fx.lineTo(sx + edge * len, sy + len * 0.24);
+      fx.stroke();
     }
-    ctx.restore();
+    fx.restore();
   }
 
   function drawVignette() {
-    const grad = ctx.createRadialGradient(W / 2, H / 2, H * 0.42, W / 2, H / 2, H * 0.86);
+    const grad = fx.createRadialGradient(W / 2, H / 2, H * 0.42, W / 2, H / 2, H * 0.86);
     grad.addColorStop(0, "rgba(6,10,16,0)");
     grad.addColorStop(1, "rgba(6,10,16,0.3)");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
+    fx.fillStyle = grad;
+    fx.fillRect(0, 0, W, H);
   }
 
   function drawCockpit(glider, snapshot) {
-    // A framed cockpit: dark coaming, a glass reflection, and three lit
-    // instruments — horizon, variometer, compass — drawn as flown gauges.
     const dashY = H * 0.78;
-    ctx.fillStyle = "#141a20";
-    ctx.beginPath();
-    ctx.moveTo(0, H);
-    ctx.lineTo(0, dashY + 26);
-    ctx.quadraticCurveTo(W * 0.5, dashY - 34, W, dashY + 26);
-    ctx.lineTo(W, H);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = "#1d262f";
-    ctx.fillRect(0, dashY + 30, W, 5);
-    // Side pillars.
-    ctx.fillStyle = "#10151b";
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(W * 0.055, 0);
-    ctx.lineTo(W * 0.028, dashY);
-    ctx.lineTo(0, dashY + 20);
-    ctx.closePath();
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(W, 0);
-    ctx.lineTo(W * 0.945, 0);
-    ctx.lineTo(W * 0.972, dashY);
-    ctx.lineTo(W, dashY + 20);
-    ctx.closePath();
-    ctx.fill();
+    fx.fillStyle = "#141a20";
+    fx.beginPath();
+    fx.moveTo(0, H);
+    fx.lineTo(0, dashY + 26);
+    fx.quadraticCurveTo(W * 0.5, dashY - 34, W, dashY + 26);
+    fx.lineTo(W, H);
+    fx.closePath();
+    fx.fill();
+    fx.fillStyle = "#1d262f";
+    fx.fillRect(0, dashY + 30, W, 5);
+    fx.fillStyle = "#10151b";
+    fx.beginPath();
+    fx.moveTo(0, 0);
+    fx.lineTo(W * 0.055, 0);
+    fx.lineTo(W * 0.028, dashY);
+    fx.lineTo(0, dashY + 20);
+    fx.closePath();
+    fx.fill();
+    fx.beginPath();
+    fx.moveTo(W, 0);
+    fx.lineTo(W * 0.945, 0);
+    fx.lineTo(W * 0.972, dashY);
+    fx.lineTo(W, dashY + 20);
+    fx.closePath();
+    fx.fill();
     drawHorizonGauge(W * 0.5, dashY + 74, 52, glider);
-    drawVarioGauge(W * 0.5 - 128, dashY + 74, 40, snapshot.verticalSpeed);
+    drawVarioGauge(W * 0.5 - 128, dashY + 74, 40, snapshot.verticalSpeed || 0);
     drawCompassGauge(W * 0.5 + 128, dashY + 74, 40, glider.heading);
   }
 
   function gaugeShell(x, y, r, label) {
-    ctx.fillStyle = "#0a0e12";
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "#3f5a68";
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-    ctx.fillStyle = "#9fd8e8";
-    ctx.font = `600 ${Math.max(9, r * 0.24)}px "Segoe UI", sans-serif`;
-    ctx.textAlign = "center";
-    ctx.fillText(label, x, y + r + 14);
+    fx.fillStyle = "#0a0e12";
+    fx.beginPath();
+    fx.arc(x, y, r, 0, Math.PI * 2);
+    fx.fill();
+    fx.strokeStyle = "#3f5a68";
+    fx.lineWidth = 2.5;
+    fx.stroke();
+    fx.fillStyle = "#9fd8e8";
+    fx.font = `600 ${Math.max(9, r * 0.24)}px "Segoe UI", sans-serif`;
+    fx.textAlign = "center";
+    fx.fillText(label, x, y + r + 14);
   }
 
   function drawHorizonGauge(x, y, r, glider) {
     gaugeShell(x, y, r, "HORIZON");
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(x, y, r - 4, 0, Math.PI * 2);
-    ctx.clip();
-    ctx.translate(x, y);
-    ctx.rotate(-glider.roll);
+    fx.save();
+    fx.beginPath();
+    fx.arc(x, y, r - 4, 0, Math.PI * 2);
+    fx.clip();
+    fx.translate(x, y);
+    fx.rotate(-glider.roll);
     const pitchPx = clamp(glider.pitch, -0.5, 0.5) * r * 1.1;
-    ctx.fillStyle = "#3d7ea6";
-    ctx.fillRect(-r, -r + pitchPx - 60, r * 2, r + 60);
-    ctx.fillStyle = "#7a5c38";
-    ctx.fillRect(-r, pitchPx, r * 2, r);
-    ctx.fillStyle = "#e8f4f8";
-    ctx.fillRect(-r, pitchPx - 1, r * 2, 2);
-    ctx.restore();
-    ctx.strokeStyle = "#ffcf4d";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(x - r * 0.5, y);
-    ctx.lineTo(x - r * 0.14, y);
-    ctx.lineTo(x, y + r * 0.14);
-    ctx.lineTo(x + r * 0.14, y);
-    ctx.lineTo(x + r * 0.5, y);
-    ctx.stroke();
+    fx.fillStyle = "#3d7ea6";
+    fx.fillRect(-r, -r + pitchPx - 60, r * 2, r + 60);
+    fx.fillStyle = "#7a5c38";
+    fx.fillRect(-r, pitchPx, r * 2, r);
+    fx.fillStyle = "#e8f4f8";
+    fx.fillRect(-r, pitchPx - 1, r * 2, 2);
+    fx.restore();
+    fx.strokeStyle = "#ffcf4d";
+    fx.lineWidth = 3;
+    fx.beginPath();
+    fx.moveTo(x - r * 0.5, y);
+    fx.lineTo(x - r * 0.14, y);
+    fx.lineTo(x, y + r * 0.14);
+    fx.lineTo(x + r * 0.14, y);
+    fx.lineTo(x + r * 0.5, y);
+    fx.stroke();
   }
 
   function drawVarioGauge(x, y, r, verticalSpeed) {
     gaugeShell(x, y, r, "VARIO m/s");
-    // Map -6..+6 onto a 270-degree dial starting at lower-left.
     const dial = Math.PI * 0.75 + ((clamp(verticalSpeed, -6, 6) + 6) / 12) * Math.PI * 1.5;
-    ctx.strokeStyle = verticalSpeed >= 0 ? "#57e389" : "#e35d4f";
-    ctx.lineWidth = 3.4;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + Math.cos(dial) * (r - 9), y + Math.sin(dial) * (r - 9));
-    ctx.stroke();
-    ctx.fillStyle = "#e8f4f8";
-    ctx.font = `700 ${r * 0.42}px "Segoe UI", sans-serif`;
-    ctx.textAlign = "center";
-    ctx.fillText((verticalSpeed >= 0 ? "+" : "") + verticalSpeed.toFixed(1), x, y + r * 0.52);
+    fx.strokeStyle = verticalSpeed >= 0 ? "#57e389" : "#e35d4f";
+    fx.lineWidth = 3.4;
+    fx.beginPath();
+    fx.moveTo(x, y);
+    fx.lineTo(x + Math.cos(dial) * (r - 9), y + Math.sin(dial) * (r - 9));
+    fx.stroke();
+    fx.fillStyle = "#e8f4f8";
+    fx.font = `700 ${r * 0.42}px "Segoe UI", sans-serif`;
+    fx.textAlign = "center";
+    fx.fillText((verticalSpeed >= 0 ? "+" : "") + verticalSpeed.toFixed(1), x, y + r * 0.52);
   }
 
   function drawCompassGauge(x, y, r, heading) {
     gaugeShell(x, y, r, "HEADING");
     const deg = ((heading * 180) / Math.PI % 360 + 360) % 360;
-    ctx.fillStyle = "#e8f4f8";
-    ctx.font = `700 ${r * 0.5}px "Segoe UI", sans-serif`;
-    ctx.textAlign = "center";
-    ctx.fillText(String(Math.round(deg)).padStart(3, "0") + "°", x, y + r * 0.18);
+    fx.fillStyle = "#e8f4f8";
+    fx.font = `700 ${r * 0.5}px "Segoe UI", sans-serif`;
+    fx.textAlign = "center";
+    fx.fillText(String(Math.round(deg)).padStart(3, "0") + "°", x, y + r * 0.18);
     const card = ["N", "E", "S", "W"];
-    ctx.font = `600 ${r * 0.3}px "Segoe UI", sans-serif`;
-    ctx.fillStyle = "#9fd8e8";
-    ctx.fillText(card[Math.round(deg / 90) % 4], x, y - r * 0.3);
+    fx.font = `600 ${r * 0.3}px "Segoe UI", sans-serif`;
+    fx.fillStyle = "#9fd8e8";
+    fx.fillText(card[Math.round(deg / 90) % 4], x, y - r * 0.3);
   }
 
   function drawSnowSquallFx(sky, glider, time) {
@@ -853,76 +1009,21 @@ export function createRenderer(canvas) {
     const dx = Math.abs(glider.x - sky.squall.x);
     if (dx > sky.squall.width * 1.6) return;
     const density = clamp(1 - dx / (sky.squall.width * 1.6), 0.12, 0.85);
-    ctx.save();
-    ctx.strokeStyle = `rgba(240,246,250,${0.5 * density})`;
-    ctx.lineWidth = 1.6;
+    fx.save();
+    fx.strokeStyle = `rgba(240,246,250,${0.5 * density})`;
+    fx.lineWidth = 1.6;
     for (let i = 0; i < 60 * density; i++) {
       const sx = ((i * 173 + time * 620) % (W + 80)) - 40;
       const sy = (i * 269 + time * 240) % H;
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(sx - 16, sy + 5);
-      ctx.stroke();
+      fx.beginPath();
+      fx.moveTo(sx, sy);
+      fx.lineTo(sx - 16, sy + 5);
+      fx.stroke();
     }
-    ctx.fillStyle = `rgba(235,242,248,${0.22 * density})`;
-    ctx.fillRect(0, 0, W, H);
-    ctx.restore();
-  }
-
-  // The one entry point main.js calls per frame.
-  function draw(snapshot) {
-    const { glider, sky, rings, activeRing, view, time, dropZone } = snapshot;
-    const palette = skyPalette(sky.dayPhase);
-    const cam = cameraFor(glider, view);
-    const project = makeProjector(cam);
-    drawSky(palette, time, glider.heading);
-    // Terrain layer: paint offscreen, then blit it back with a slight blur
-    // over the sky already on the main canvas — the soft edge pixels blend
-    // into the sky beneath them, so the skyline gets no dark fringe.
-    const mainCtx = ctx;
-    terrainCtx.clearRect(0, 0, W, H);
-    ctx = terrainCtx;
-    drawTerrain(cam, project, palette, time);
-    ctx = mainCtx;
-    ctx.save();
-    ctx.filter = "blur(1.4px)";
-    ctx.drawImage(terrainCanvas, 0, 0, W, H);
-    ctx.restore();
-    drawTrees(project, cam);
-    drawRunway(project, palette);
-    drawVillage(project, palette);
-    drawLighthouse(project, palette, time);
-    if (dropZone) drawDropZone(project, dropZone);
-    drawThermalSpirals(project, sky, time);
-    drawBirds(project, sky, glider, time);
-    drawRings(project, rings, activeRing, time, palette.aurora);
-    drawGliderShadow(project, glider);
-    drawSnowSquallFx(sky, glider, time);
-    if (view === "cockpit") drawCockpit(glider, snapshot);
-    else {
-      drawGliderChase(glider, time);
-      drawSpeedStreaks(glider, time);
-    }
-    drawVignette();
-    return palette;
+    fx.fillStyle = `rgba(235,242,248,${0.22 * density})`;
+    fx.fillRect(0, 0, W, H);
+    fx.restore();
   }
 
   return { draw, resize, get size() { return { W, H }; } };
 }
-
-function rgb(c) {
-  return `rgb(${c[0]},${c[1]},${c[2]})`;
-}
-
-function shadeCol(col, factor) {
-  return [clamp(Math.round(col[0] * factor), 0, 255), clamp(Math.round(col[1] * factor), 0, 255), clamp(Math.round(col[2] * factor), 0, 255)];
-}
-
-function blendCol(col, target, t) {
-  return [
-    clamp(Math.round(col[0] + (target[0] - col[0]) * t), 0, 255),
-    clamp(Math.round(col[1] + (target[1] - col[1]) * t), 0, 255),
-    clamp(Math.round(col[2] + (target[2] - col[2]) * t), 0, 255),
-  ];
-}
-

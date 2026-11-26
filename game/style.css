@@ -16,6 +16,18 @@ html, body {
   cursor: crosshair;
 }
 
+/* The 2D overlay (HUD, menus, cockpit) floats above the WebGL world. */
+#fx {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: crosshair;
+  z-index: 2;
+}
+
 /* Read aloud, never shown: the status line screen readers announce. */
 #status {
   position: absolute;

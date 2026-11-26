@@ -52,12 +52,18 @@ export function terrainHeight(x, z) {
   h += peak(x, z, -2100, -1600, 950, 330);
   h += peak(x, z, 2400, 1900, 1050, 360);
   h += peak(x, z, 1500, -2900, 800, 250);
-  // Flatten the home plateau: the ice runway and village sit on it, and the
-  // southern approach corridor is flattened too, so finals are flyable.
-  const homeBlend = Math.max(
-    plateauBlend(x, z, RUNWAY.centreX, RUNWAY.centreZ, 780),
-    plateauBlend(x, z, RUNWAY.centreX, RUNWAY.centreZ + 560, 520) * 0.92,
-  );
+  // Flatten the home ground as a rectangle around the strip with a long
+  // southern apron: inside it the ground sits exactly at strip height, so
+  // the runway is never buried under its own plateau and the whole
+  // approach corridor is flyable.
+  const rectDx = Math.max(Math.abs(x - RUNWAY.centreX) - (RUNWAY.width / 2 + 130), 0);
+  const rectDz = Math.max(Math.abs(z - RUNWAY.centreZ) - (RUNWAY.length / 2 + 330), 0);
+  const rectDist = Math.hypot(rectDx, rectDz);
+  let homeBlend = 0;
+  if (rectDist < 340) {
+    const t = 1 - rectDist / 340;
+    homeBlend = t * t * (3 - 2 * t);
+  }
   h = h * (1 - homeBlend) + RUNWAY.groundY * homeBlend;
   // Flatten the far lighthouse point just enough to stand on.
   const lightBlend = plateauBlend(x, z, LIGHTHOUSE.x, LIGHTHOUSE.z, 260);
@@ -180,7 +186,7 @@ export const SURFACE_COLOURS = {
   water: [34, 110, 142],
   shore: [198, 178, 134],
   tundra: [102, 134, 66],
-  shrub: [172, 102, 48],
+  shrub: [158, 99, 53],
   snow: [228, 237, 245],
   ice: [160, 214, 230],
   rock: [126, 100, 82],

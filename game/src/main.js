@@ -15,7 +15,8 @@ import { createAudio } from "./audioVariometer.js";
 import { loadSave, storeSave, recordResult } from "./saveGame.js";
 import { readShotScene } from "./shots.js";
 
-const canvas = document.getElementById("game");
+const glCanvas = document.getElementById("game");
+const canvas = document.getElementById("fx");
 const statusEl = document.getElementById("status");
 const ctx = canvas.getContext("2d");
 
@@ -29,7 +30,7 @@ let renderer = null;
 let bootError = null;
 try {
   if (!ctx) throw new Error("Canvas 2D is not available in this browser.");
-  renderer = createRenderer(canvas);
+  renderer = createRenderer(glCanvas, canvas);
 } catch (err) {
   bootError = err;
 }
