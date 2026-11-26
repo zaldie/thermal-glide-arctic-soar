@@ -110,20 +110,41 @@ export const DROP_ZONE = {
 
 // Surface classification for the renderer: water, snow, rock, ice runway.
 export function surfaceAt(x, z, h) {
-  if (h <= SEA_LEVEL + 1.5) return "water";
+  if (h <= SEA_LEVEL + 1.5) return h < -16 ? "deepwater" : "water";
   const runwayDx = Math.abs(x - RUNWAY.centreX);
   const runwayDz = Math.abs(z - RUNWAY.centreZ);
   if (runwayDx <= RUNWAY.width / 2 && runwayDz <= RUNWAY.length / 2) return "runway";
+  // Steep ground is bare warm rock, whatever its height.
+  const e = 16;
+  const slope = Math.max(
+    Math.abs(terrainHeight(x + e, z) - terrainHeight(x - e, z)),
+    Math.abs(terrainHeight(x, z + e) - terrainHeight(x, z - e)),
+  ) / (2 * e);
+  if (slope > 0.6) return "rock";
+  if (h < SEA_LEVEL + 8) return "shore";
+  // The high plateau is old ice where it lies flat.
+  if (h > 248) return "ice";
+  // Low, gentle ground carries the arctic summer: green tundra meadows and
+  // rust-red shrub patches, laid down by one broad noise so they read as
+  // country, not confetti.
+  if (h < 128) {
+    const patch = smoothNoise(x - 9000, z + 7000, 460);
+    if (patch > 0.52) return "tundra";
+    if (patch < 0.3) return "shrub";
+  }
   const slopeNoise = smoothNoise(x + 5000, z - 3000, 180);
-  if (h > 235 + slopeNoise * 90) return "rock";
-  if (h < 26) return "shore";
+  if (h > 205 + slopeNoise * 70) return "rock";
   return "snow";
 }
 
 export const SURFACE_COLOURS = {
-  water: [26, 84, 120],
-  shore: [148, 164, 168],
-  snow: [226, 235, 242],
-  rock: [104, 102, 110],
+  deepwater: [18, 66, 108],
+  water: [34, 110, 142],
+  shore: [198, 178, 134],
+  tundra: [102, 134, 66],
+  shrub: [172, 102, 48],
+  snow: [228, 237, 245],
+  ice: [160, 214, 230],
+  rock: [126, 100, 82],
   runway: [188, 205, 214],
 };

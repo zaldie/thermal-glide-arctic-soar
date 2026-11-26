@@ -273,7 +273,8 @@ export function createRenderer(canvas) {
         const jz = wz + (treeHash(ix, iz + 40) - 0.5) * 80;
         const gy = terrainHeight(jx, jz);
         if (gy < 18 || gy > 215) continue;
-        if (surfaceAt(jx, jz, gy) !== "snow" && surfaceAt(jx, jz, gy) !== "shore") continue;
+        const treeSurface = surfaceAt(jx, jz, gy);
+        if (treeSurface !== "snow" && treeSurface !== "shore" && treeSurface !== "tundra") continue;
         const base = project(jx, gy, jz);
         const top = project(jx, gy + 17, jz);
         if (!base || !top || base.depth > 2100) continue;
