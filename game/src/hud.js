@@ -12,7 +12,7 @@ export function drawHud(ctx, W, H, snap) {
   const { glider, mission, ringIndex, score, seconds, message } = snap;
   ctx.save();
   // --- Top-left flight data block: ALT / SPD / HDG, big and unambiguous.
-  panel(ctx, 16, 16, 252, 118, 0.62);
+  panel(ctx, 16, 16, 252, 148, 0.62);
   ctx.fillStyle = "#eaf6fb";
   ctx.textAlign = "left";
   ctx.font = '700 30px "Segoe UI", sans-serif';
@@ -26,6 +26,43 @@ export function drawHud(ctx, W, H, snap) {
   ctx.fillText(`HDG ${hdg}°`, 30, 124);
   // Compass strip: a moving tape with cardinal letters.
   drawCompassStrip(ctx, 150, 106, 104, glider.heading);
+  // Second row: total energy (the glider's real fuel gauge) and the
+  // wind, drawn as an arrow relative to the nose, plus the airbrake tag.
+  ctx.font = '700 16px "Segoe UI", sans-serif';
+  ctx.fillStyle = "#ffcf4d";
+  ctx.fillText(`E ${Math.round(energyHeight(glider))} m`, 30, 152);
+  if (snap.sky) {
+    const windSpeed = Math.hypot(snap.sky.windX, snap.sky.windZ);
+    const windBearing = Math.atan2(snap.sky.windX, -snap.sky.windZ);
+    let rel = windBearing - glider.heading;
+    while (rel > Math.PI) rel -= Math.PI * 2;
+    while (rel < -Math.PI) rel += Math.PI * 2;
+    ctx.save();
+    ctx.translate(138, 146);
+    ctx.rotate(rel);
+    ctx.fillStyle = "#9fe8c0";
+    ctx.beginPath();
+    ctx.moveTo(0, -7);
+    ctx.lineTo(4.5, 4);
+    ctx.lineTo(0, 1.5);
+    ctx.lineTo(-4.5, 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = "#9fe8c0";
+    ctx.font = '600 14px "Segoe UI", sans-serif';
+    ctx.fillText(`WIND ${windSpeed.toFixed(0)} m/s`, 150, 152);
+  }
+  if (glider.airbrake) {
+    ctx.fillStyle = "#e07b39";
+    roundRect(ctx, 216, 134, 42, 20, 5);
+    ctx.fill();
+    ctx.fillStyle = "#fff3e2";
+    ctx.font = '800 12px "Segoe UI", sans-serif';
+    ctx.textAlign = "center";
+    ctx.fillText("BRK", 237, 148);
+    ctx.textAlign = "left";
+  }
 
   // --- Top-right: mission, score, clock.
   panel(ctx, W - 268, 16, 252, 118, 0.62);
@@ -43,8 +80,8 @@ export function drawHud(ctx, W, H, snap) {
   }
 
   // --- Variometer + energy, right side under the mission block.
-  drawVarioBar(ctx, W - 58, 158, 300, glider.verticalSpeed);
-  drawEnergyBar(ctx, 30, 158, 300, glider, snap.groundY);
+  drawVarioBar(ctx, W - 58, 182, 276, glider.verticalSpeed);
+  drawEnergyBar(ctx, 30, 182, 276, glider, snap.groundY);
 
   // --- Objectives, bottom-left.
   panel(ctx, 16, H - 108, 330, 92, 0.5);
@@ -74,6 +111,21 @@ export function drawHud(ctx, W, H, snap) {
     ctx.textAlign = "center";
     ctx.fillStyle = "#ffe9a8";
     ctx.fillText(message.text, W / 2, H * 0.22);
+  }
+  // --- Touchdown grade: the landing pays off on screen while the
+  // glider rolls out, before the results screen takes over.
+  if (snap.touchdown) {
+    const td = snap.touchdown;
+    const cx = W / 2;
+    const cy = H * 0.34;
+    panel(ctx, cx - 190, cy - 44, 380, 88, 0.55);
+    ctx.textAlign = "center";
+    ctx.fillStyle = td.grade === "GREASED IT" ? "#7dff9a" : td.grade === "GENTLE" ? "#ffe9a8" : "#ffb84d";
+    ctx.font = '800 30px "Segoe UI", sans-serif';
+    ctx.fillText(`TOUCHDOWN ${td.sink.toFixed(1)} m/s`, cx, cy - 6);
+    ctx.font = '700 19px "Segoe UI", sans-serif';
+    ctx.fillStyle = "#eaf6fb";
+    ctx.fillText(`${td.grade} · at ${td.speedKmh} km/h`, cx, cy + 26);
   }
   if (snap.dropped === false && mission.objective === "drop") {
     ctx.font = '600 16px "Segoe UI", sans-serif';

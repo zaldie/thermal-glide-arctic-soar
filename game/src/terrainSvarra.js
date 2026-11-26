@@ -171,6 +171,10 @@ export function terrainColorAt(x, z, h, slope) {
   const patch = smoothNoise(x - 9000, z + 7000, 460);
   let col = mixCol(C.shrub, C.tundra, blendStep(0.28, 0.55, patch));
   col = mixCol(C.shore, col, blendStep(2.2, 9, h));
+  // Shorelines vary from bay to bay: pale sand here, dark shingle there,
+  // so the coast never reads as one uniform orange band.
+  const shoreVar = smoothNoise(x - 4000, z + 9000, 300);
+  col = mixCol(col, [216, 188, 142], blendStep(10, 3.5, h) * shoreVar * 0.38);
   // Climbing ground fades into snow along a noisy snowline.
   const snowLine = 150 + smoothNoise(x + 5000, z - 3000, 180) * 60;
   col = mixCol(col, C.snow, blendStep(snowLine - 30, snowLine + 15, h));

@@ -12,180 +12,11 @@ import {
   MeshBuilder, buildTerrainGeometry, buildRingGeometry, buildTorusGeometry,
   mat4Perspective, mat4Multiply, mat4View, mat4Model, mat4Identity,
 } from "./glMesh.js";
-
-const FOG_NEAR = 950;
-const FOG_FAR = 8200;
-
-const LIT_VERT = `
-attribute vec3 aPos;
-attribute vec3 aNormal;
-attribute vec3 aColor;
-attribute float aSpec;
-uniform mat4 uMVP;
-uniform mat4 uModel;
-varying vec3 vColor;
-varying vec3 vNormalW;
-varying vec3 vWorld;
-varying float vSpec;
-void main() {
-  vec4 w = uModel * vec4(aPos, 1.0);
-  vWorld = w.xyz;
-  vNormalW = mat3(uModel) * aNormal;
-  vColor = aColor;
-  vSpec = aSpec;
-  gl_Position = uMVP * vec4(aPos, 1.0);
-}`;
-
-const LIT_FRAG = `
-precision mediump float;
-varying vec3 vColor;
-varying vec3 vNormalW;
-varying vec3 vWorld;
-varying float vSpec;
-uniform vec3 uSunDir;
-uniform vec3 uSunColor;
-uniform vec3 uAmbient;
-uniform vec3 uFogColor;
-uniform vec3 uCamPos;
-uniform float uEmissive;
-uniform float uAlpha;
-uniform float uTime;
-uniform vec3 uTint;
-void main() {
-  vec3 n = normalize(vNormalW);
-  if (!gl_FrontFacing) n = -n;
-  if (vSpec > 0.6) {
-    // Open water: a slow, broad ripple walks the normal so the fjord
-    // glitters in swells, not in a checkerboard.
-    n = normalize(n + vec3(
-      sin(vWorld.x * 0.045 + uTime * 1.3) * 0.035, 0.0,
-      cos(vWorld.z * 0.038 + uTime * 1.7) * 0.035));
-  }
-  float diff = clamp((dot(n, uSunDir) + 0.38) / 1.38, 0.0, 1.0);
-  vec3 col = vColor * uTint * (uAmbient + uSunColor * diff);
-  vec3 vdir = normalize(uCamPos - vWorld);
-  vec3 hv = normalize(vdir + uSunDir);
-  col += uSunColor * pow(max(dot(n, hv), 0.0), 28.0) * vSpec * 0.55;
-  col += vColor * uTint * uEmissive;
-  float dist = length(uCamPos - vWorld);
-  float f = smoothstep(${FOG_NEAR}.0, ${FOG_FAR}.0, dist);
-  col = mix(col, uFogColor, f);
-  gl_FragColor = vec4(col, uAlpha);
-}`;
-
-const SKY_VERT = `
-attribute vec2 aNDC;
-varying vec2 vNDC;
-void main() {
-  vNDC = aNDC;
-  gl_Position = vec4(aNDC, 0.9999, 1.0);
-}`;
-
-const SKY_FRAG = `
-precision mediump float;
-varying vec2 vNDC;
-uniform vec3 uRight;
-uniform vec3 uUp;
-uniform vec3 uFwd;
-uniform float uTanF;
-uniform float uAspect;
-uniform vec3 uTop;
-uniform vec3 uHorizon;
-uniform vec3 uFog;
-uniform vec3 uSunDir;
-uniform vec3 uSunTint;
-uniform float uSunI;
-uniform float uAurora;
-uniform float uTime;
-float hash13(vec3 p) {
-  p = fract(p * 0.1031);
-  p += dot(p, p.zyx + 31.32);
-  return fract((p.x + p.y) * p.z);
-}
-void main() {
-  vec3 dir = normalize(uFwd + uRight * (vNDC.x * uTanF * uAspect) + uUp * (vNDC.y * uTanF));
-  float y = dir.y;
-  vec3 col = mix(uHorizon, uTop, pow(clamp(y, 0.0, 1.0), 0.58));
-  col = mix(uFog, col, smoothstep(0.0, 0.14, y));
-  if (y < 0.0) col = mix(uFog, uFog * 0.9, clamp(-y * 3.0, 0.0, 1.0));
-  float sd = dot(dir, uSunDir);
-  col += uSunTint * pow(max(sd, 0.0), 300.0) * 0.75 * uSunI;
-  col += uSunTint * smoothstep(0.99955, 0.99985, sd) * 3.0 * uSunI;
-  col += uSunTint * pow(max(sd, 0.0), 7.0) * 0.1 * uSunI;
-  if (uSunI < 0.5 && y > 0.0) {
-    vec3 cell = floor(dir * 220.0);
-    float h = hash13(cell);
-    float star = step(0.9975, h) * (0.5 - uSunI) * 2.0;
-    float tw = 0.75 + 0.25 * sin(uTime * 2.0 + h * 40.0);
-    col += vec3(0.9, 0.95, 1.0) * star * tw * smoothstep(0.02, 0.2, y);
-  }
-  if (uAurora > 0.01 && y > 0.0) {
-    float band = sin(dir.x * 5.0 + uTime * 0.11 + sin(dir.z * 3.0 + uTime * 0.05) * 1.7);
-    float band2 = sin(dir.x * 11.0 - uTime * 0.07 + dir.y * 6.0);
-    float curtain = smoothstep(0.03, 0.35, y) * smoothstep(0.9, 0.3, y);
-    float rays = 0.55 + 0.45 * band * band2;
-    col += vec3(0.16, 0.95, 0.45) * curtain * rays * uAurora * 0.5;
-    col += vec3(0.45, 0.2, 0.8) * curtain * (0.5 + 0.5 * band2) * uAurora * 0.16;
-  }
-  gl_FragColor = vec4(col, 1.0);
-}`;
-
-const SPRITE_VERT = `
-attribute vec3 aPos;
-attribute vec2 aCorner;
-attribute vec2 aSize;
-attribute vec4 aColor;
-uniform mat4 uProj;
-uniform mat4 uView;
-uniform vec3 uRight;
-uniform vec3 uUp;
-uniform vec4 uTint;
-uniform float uDrift;
-uniform float uWrap;
-varying vec2 vUv;
-varying vec4 vColor;
-varying float vFogF;
-void main() {
-  vec3 centre = aPos;
-  centre.x = mix(centre.x, mod(centre.x + uDrift + ${WORLD_HALF}.0, ${WORLD_HALF * 2}.0) - ${WORLD_HALF}.0, uWrap);
-  vec3 wp = centre + uRight * (aCorner.x * aSize.x) + uUp * (aCorner.y * aSize.y);
-  vec4 vp = uView * vec4(wp, 1.0);
-  vFogF = smoothstep(${FOG_NEAR}.0, ${FOG_FAR}.0, -vp.z);
-  vUv = aCorner * 0.5 + 0.5;
-  vColor = aColor * uTint;
-  gl_Position = uProj * vp;
-}`;
-
-const SPRITE_FRAG = `
-precision mediump float;
-varying vec2 vUv;
-varying vec4 vColor;
-varying float vFogF;
-uniform sampler2D uTex;
-uniform vec3 uFogColor;
-void main() {
-  vec4 tex = texture2D(uTex, vUv);
-  vec4 col = tex * vColor;
-  col.rgb = mix(col.rgb, uFogColor, vFogF * 0.7);
-  gl_FragColor = col;
-}`;
-
-const FLAT_VERT = `
-attribute vec3 aPos;
-attribute vec4 aColor;
-uniform mat4 uMVP;
-varying vec4 vColor;
-void main() {
-  vColor = aColor;
-  gl_Position = uMVP * vec4(aPos, 1.0);
-}`;
-
-const FLAT_FRAG = `
-precision mediump float;
-varying vec4 vColor;
-void main() {
-  gl_FragColor = vColor;
-}`;
+import {
+  FOG_NEAR, FOG_FAR, LIT_VERT, LIT_FRAG, SKY_VERT, SKY_FRAG,
+  SPRITE_VERT, SPRITE_FRAG, FLAT_VERT, FLAT_FRAG,
+} from "./glShaders.js";
+import { buildAircraftGeometries } from "./aircraftMesh.js";
 
 function compileProgram(gl, vertSrc, fragSrc) {
   const make = (type, src) => {
@@ -277,6 +108,7 @@ export function createRenderer(glCanvas, fxCanvas) {
     uEmissive: gl.getUniformLocation(litProg, "uEmissive"),
     uAlpha: gl.getUniformLocation(litProg, "uAlpha"),
     uTime: gl.getUniformLocation(litProg, "uTime"),
+    uRim: gl.getUniformLocation(litProg, "uRim"),
     uTint: gl.getUniformLocation(litProg, "uTint"),
   };
 
@@ -338,9 +170,15 @@ export function createRenderer(glCanvas, fxCanvas) {
         const shade = 0.85 + treeHash(ix + 7, iz - 40) * 0.35;
         const fol = [0.13 * shade, 0.28 * shade, 0.22 * shade];
         forest.box(jx, gy + 1.5 * s, jz, 0.55 * s, 3 * s, 0.55 * s, [0.29, 0.22, 0.15], 0.02);
-        forest.cone(jx, gy + 2.6 * s, jz, 3.5 * s, 9.5 * s, 7, fol, 0.03);
-        forest.cone(jx, gy + 7.2 * s, jz, 2.4 * s, 7.5 * s, 7, fol, 0.03);
-        forest.cone(jx, gy + 12.6 * s, jz, 0.95 * s, 2.4 * s, 6, [0.93, 0.96, 0.98], 0.05);
+        if (treeHash(ix + 99, iz - 99) > 0.55) {
+          // Round-crowned pine: a ball of foliage with a snowy cap.
+          forest.sphere(jx, gy + 7.6 * s, jz, 3.6 * s, fol, 0.03);
+          forest.cone(jx, gy + 11.2 * s, jz, 1.5 * s, 4.2 * s, 6, [0.93, 0.96, 0.98], 0.05);
+        } else {
+          forest.cone(jx, gy + 2.6 * s, jz, 3.5 * s, 9.5 * s, 7, fol, 0.03);
+          forest.cone(jx, gy + 7.2 * s, jz, 2.4 * s, 7.5 * s, 7, fol, 0.03);
+          forest.cone(jx, gy + 12.6 * s, jz, 0.95 * s, 2.4 * s, 6, [0.93, 0.96, 0.98], 0.05);
+        }
       }
     }
   }
@@ -407,72 +245,16 @@ export function createRenderer(glCanvas, fxCanvas) {
   const discMesh = uploadGeometry(buildRingGeometry(0.02, 1, 40));
   const ringBandMesh = uploadGeometry(buildRingGeometry(0.93, 1, 40));
 
-  // The aircraft as a small scale model — the sci-fi jet the user picked
-  // from the concept sheet: white angular fuselage, two-panel swept wings,
-  // downward winglets, twin fins, and cyan light strips along the wing
-  // leading edges, spine and intakes, with a glowing cyan engine core.
-  // Pure looks: the physics underneath is still the same engineless
-  // energy model.
-  const gliderBody = new MeshBuilder();
-  {
-    const white = [0.92, 0.94, 0.96];
-    const grey = [0.78, 0.82, 0.86];
-    const dark = [0.12, 0.14, 0.17];
-    gliderBody.lathe([
-      [-4.8, 0.02], [-4.3, 0.18], [-3.4, 0.38], [-2.4, 0.52], [-1.2, 0.6],
-      [0.2, 0.62], [1.4, 0.56], [2.6, 0.44], [3.4, 0.3], [3.8, 0.22],
-    ], 16, white, 0.4);
-    // Engine nozzle.
-    gliderBody.lathe([[3.8, 0.22], [3.95, 0.27], [4.08, 0.2]], 12, dark, 0.2);
-    // Two-panel swept wings: white inner, grey outer, kinked like the art.
-    gliderBody.wing(0.25, 3.1, -0.08, -1.15, -0.15, 2.0, 1.25, 0.09, white, 0.2);
-    gliderBody.wing(-0.25, -3.1, -0.08, -1.15, -0.15, 2.0, 1.25, 0.09, white, 0.2);
-    gliderBody.wing(3.1, 5.6, -0.08, -0.15, 0.75, 1.25, 0.6, 0.08, grey, 0.2);
-    gliderBody.wing(-3.1, -5.6, -0.08, -0.15, 0.75, 1.25, 0.6, 0.08, grey, 0.2);
-    // Downward winglets at the tips.
-    gliderBody.box(5.58, -0.38, 1.02, 0.07, 0.62, 0.68, grey, 0.16);
-    gliderBody.box(-5.58, -0.38, 1.02, 0.07, 0.62, 0.68, grey, 0.16);
-    // Side intakes.
-    gliderBody.box(0.52, -0.15, 0.3, 0.36, 0.4, 1.4, dark, 0.12);
-    gliderBody.box(-0.52, -0.15, 0.3, 0.36, 0.4, 1.4, dark, 0.12);
-    // Swept tailplanes and twin fins.
-    gliderBody.wing(0.12, 2.2, 0.02, 2.7, 3.25, 0.95, 0.5, 0.07, grey, 0.16);
-    gliderBody.wing(-0.12, -2.2, 0.02, 2.7, 3.25, 0.95, 0.5, 0.07, grey, 0.16);
-    gliderBody.box(0.72, 0.72, 3.15, 0.08, 1.1, 0.9, white, 0.16);
-    gliderBody.box(-0.72, 0.72, 3.15, 0.08, 1.1, 0.9, white, 0.16);
-  }
-  const gliderMesh = uploadGeometry(gliderBody.build());
-  const canopy = new MeshBuilder();
-  canopy.sphere(0, 0.34, -2.0, 0.44, [0.1, 0.2, 0.3], 1.0, 0.76);
-  canopy.sphere(0, 0.32, -1.4, 0.48, [0.1, 0.2, 0.3], 1.0, 0.76);
-  const canopyMesh = uploadGeometry(canopy.build());
-  // Cyan light strips: wing leading edges, spine and intake rims.
-  const accents = new MeshBuilder();
-  {
-    const cyan = [0.25, 0.85, 1.0];
-    accents.wing(3.15, 5.55, 0.03, -0.12, 0.72, 0.17, 0.13, 0.02, cyan, 0);
-    accents.wing(-3.15, -5.55, 0.03, -0.12, 0.72, 0.17, 0.13, 0.02, cyan, 0);
-    accents.box(0, 0.6, -0.5, 0.15, 0.05, 3.2, cyan, 0);
-    accents.box(0.52, -0.15, -0.42, 0.38, 0.42, 0.05, cyan, 0);
-    accents.box(-0.52, -0.15, -0.42, 0.38, 0.42, 0.05, cyan, 0);
-    accents.box(0.72, 1.3, 3.15, 0.09, 0.2, 0.9, cyan, 0);
-    accents.box(-0.72, 1.3, 3.15, 0.09, 0.2, 0.9, cyan, 0);
-  }
-  const accentsMesh = uploadGeometry(accents.build());
-  const brakes = new MeshBuilder();
-  brakes.box(2.2, 0.1, 0.1, 1.3, 0.26, 0.6, [0.3, 0.34, 0.4], 0.1);
-  brakes.box(-2.2, 0.1, 0.1, 1.3, 0.26, 0.6, [0.3, 0.34, 0.4], 0.1);
-  const brakesMesh = uploadGeometry(brakes.build());
-  const navLights = new MeshBuilder();
-  navLights.sphere(-5.6, -0.08, 1.35, 0.24, [1, 0.2, 0.2], 0);
-  navLights.sphere(5.6, -0.08, 1.35, 0.24, [0.2, 1, 0.45], 0);
-  const navLightsMesh = uploadGeometry(navLights.build());
-  const strobe = new MeshBuilder();
-  strobe.sphere(0, 0.15, 3.9, 0.22, [1, 1, 1], 0);
-  const strobeMesh = uploadGeometry(strobe.build());
-  const burner = new MeshBuilder();
-  burner.sphere(0, 0, 4.02, 0.17, [0.3, 0.85, 1.0], 0);
-  const burnerMesh = uploadGeometry(burner.build());
+  // The aircraft: geometry lives in aircraftMesh.js, this file only
+  // uploads and draws it.
+  const aircraft = buildAircraftGeometries();
+  const gliderMesh = uploadGeometry(aircraft.body);
+  const canopyMesh = uploadGeometry(aircraft.canopy);
+  const accentsMesh = uploadGeometry(aircraft.accents);
+  const brakesMesh = uploadGeometry(aircraft.brakes);
+  const navLightsMesh = uploadGeometry(aircraft.navLights);
+  const strobeMesh = uploadGeometry(aircraft.strobe);
+  const burnerMesh = uploadGeometry(aircraft.burner);
 
   // ---------- Sprites: clouds and runway edge lights ----------
   const puffTexture = (() => {
@@ -565,6 +347,50 @@ export function createRenderer(glCanvas, fxCanvas) {
     gl.drawElements(gl.TRIANGLES, buf.count, gl.UNSIGNED_INT, 0);
   }
 
+  // Dynamic sprites: one batch whose positions are rewritten every
+  // frame — the rising air inside thermals and touchdown snow spray.
+  const MAX_DYN_SPRITES = 110;
+  const dynSprites = (() => {
+    const mk = () => gl.createBuffer();
+    const pos = mk(), corner = mk(), size = mk(), col = mk();
+    const corners = [];
+    for (let i = 0; i < MAX_DYN_SPRITES; i++) {
+      for (const [cx, cy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) corners.push(cx, cy);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, corner);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(corners), gl.STATIC_DRAW);
+    const idx = [];
+    for (let i = 0; i < MAX_DYN_SPRITES; i++) {
+      const b = i * 4;
+      idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+    }
+    const ibo = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
+    return { pos, corner, size, col, ibo, count: 0 };
+  })();
+
+  function updateDynSprites(items) {
+    const n = Math.min(items.length, MAX_DYN_SPRITES);
+    const pos = new Float32Array(n * 12), size = new Float32Array(n * 8), col = new Float32Array(n * 16);
+    for (let i = 0; i < n; i++) {
+      const it = items[i];
+      for (let v = 0; v < 4; v++) {
+        pos.set([it.x, it.y, it.z], (i * 4 + v) * 3);
+        size.set([it.w, it.h], (i * 4 + v) * 2);
+        col.set([it.r, it.g, it.b, it.a], (i * 4 + v) * 4);
+      }
+    }
+    const up = (buf, arr) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, arr, gl.DYNAMIC_DRAW);
+    };
+    up(dynSprites.pos, pos);
+    up(dynSprites.size, size);
+    up(dynSprites.col, col);
+    dynSprites.count = n * 6;
+  }
+
   const cloudSprites = makeSpriteBuffer(Array.from({ length: 46 }, (_, i) => {
     const h1 = treeHash(i * 3 + 11, 7);
     const h2 = treeHash(5, i * 7 + 3);
@@ -619,11 +445,16 @@ export function createRenderer(glCanvas, fxCanvas) {
     if (view === "cockpit") {
       return { x: glider.x, y: glider.y + 1.2, z: glider.z, fwdX, fwdY, fwdZ, roll: glider.roll * 0.55 };
     }
+    // Near the ground the camera tips down a little further, so the
+    // glider stays framed through the flare and the roll-out instead
+    // of sinking out of the bottom of the picture.
+    const gap = glider.y - terrainHeight(glider.x, glider.z);
+    const groundTilt = clamp(1 - gap / 160, 0, 1) * 0.15;
     return {
       x: glider.x - fwdX * 21,
       y: glider.y + 7.2 - fwdY * 21,
       z: glider.z - fwdZ * 21,
-      fwdX, fwdY: fwdY * 0.82 - 0.06, fwdZ,
+      fwdX, fwdY: fwdY * 0.82 - 0.06 - groundTilt, fwdZ,
       roll: glider.roll * 0.4,
     };
   }
@@ -724,6 +555,8 @@ export function createRenderer(glCanvas, fxCanvas) {
     gl.uniform3f(lit.uFogColor, fog[0], fog[1], fog[2]);
     gl.uniform3f(lit.uCamPos, cam.x, cam.y, cam.z);
     gl.uniform1f(lit.uTime, time);
+    // Rim light grows as the sun leaves, so edges stay readable at night.
+    gl.uniform1f(lit.uRim, 0.06 + (1 - sunI) * 0.22 + palette.aurora * 0.12);
 
     drawMesh(terrainMesh, viewProj, identity);
     drawMesh(forestMesh, viewProj, identity);
@@ -792,11 +625,11 @@ export function createRenderer(glCanvas, fxCanvas) {
       const gap = glider.y - gy;
       if (gap > 0 && gap < 260) {
         const shrink = clamp(1 - gap / 300, 0.25, 1);
-        const sm = mat4Model(glider.x, gy + 0.7, glider.z, 1, 0, 0, 0, 1, 0, 0, 0, 1, 10.5 * shrink + 2);
+        const sm = mat4Model(glider.x, gy + 0.7, glider.z, 1, 0, 0, 0, 1, 0, 0, 0, 1, 13 * shrink + 2);
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         gl.depthMask(false);
-        drawMesh(discMesh, mat4Multiply(viewProj, sm), sm, { alpha: 0.34 * shrink, tint: [0.04, 0.05, 0.07] });
+        drawMesh(discMesh, mat4Multiply(viewProj, sm), sm, { alpha: 0.46 * shrink, tint: [0.04, 0.05, 0.07] });
         gl.depthMask(true);
         gl.disable(gl.BLEND);
       }
@@ -819,7 +652,9 @@ export function createRenderer(glCanvas, fxCanvas) {
       if (Math.sin(time * 2.4) > 0.72) drawMesh(strobeMesh, mvp, gm, { emissive: 1.6 });
     }
 
-    // Thermal spirals: rising ribbons of light air.
+    // Thermal spirals: rising ribbons of light air, drawn twice — a
+    // bright core and a wider, fainter sheath — so the column reads
+    // from across the fjord, additively against the sky.
     {
       const positions = [];
       const colors = [];
@@ -828,6 +663,7 @@ export function createRenderer(glCanvas, fxCanvas) {
         const ground = terrainHeight(t.x, t.z);
         const liftF = clamp(t.currentLift / 3.4, 0.3, 1);
         let prev = null;
+        let prevWide = null;
         for (let i = 0; i <= 40; i++) {
           const frac = i / 40;
           const ang = frac * Math.PI * 5 + t.driftPhase + time * 0.9;
@@ -835,17 +671,23 @@ export function createRenderer(glCanvas, fxCanvas) {
           const px = t.x + Math.cos(ang) * rad;
           const pz = t.z + Math.sin(ang) * rad;
           const py = ground + 12 + frac * 330;
+          const wx = t.x + Math.cos(ang) * rad * 1.09;
+          const wz = t.z + Math.sin(ang) * rad * 1.09;
           if (prev) {
             positions.push(prev[0], prev[1], prev[2], px, py, pz);
-            const a = 0.34 * (1 - frac) * liftF;
+            const a = 0.6 * (1 - frac) * liftF;
             colors.push(1, 1, 1, a, 1, 1, 1, a);
+            positions.push(prevWide[0], prevWide[1], prevWide[2], wx, py, wz);
+            const aw = 0.22 * (1 - frac) * liftF;
+            colors.push(0.75, 0.95, 1, aw, 0.75, 0.95, 1, aw);
           }
           prev = [px, py, pz];
+          prevWide = [wx, py, wz];
         }
       }
       if (positions.length) {
         gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
         gl.depthMask(false);
         drawDynamic(new Float32Array(positions), new Float32Array(colors), gl.LINES, viewProj);
         gl.depthMask(true);
@@ -894,6 +736,49 @@ export function createRenderer(glCanvas, fxCanvas) {
     drawSprites(cloudSprites, proj, viewM, basis.right, basis.up, cloudTint, time * 6, 1, fog);
     const lightGlow = clamp(1.15 - palette.sun, 0.15, 1);
     drawSprites(edgeLightSprites, proj, viewM, basis.right, basis.up, [1, 1, 1, lightGlow], 0, 0, fog);
+
+    // The air itself, made visible: soft puffs rising inside every
+    // working thermal, climbing and swelling as they go — plus the
+    // snow spray a fresh touchdown kicks up behind the rolling glider.
+    {
+      const items = [];
+      for (const t of sky.thermals) {
+        if (!t.currentLift || t.currentLift < 0.7) continue;
+        const ground = terrainHeight(t.x, t.z);
+        const liftF = clamp(t.currentLift / 3.4, 0.3, 1);
+        for (let k = 0; k < 5; k++) {
+          const frac = (time * (0.045 + liftF * 0.05) + t.id * 0.37 + k * 0.2) % 1;
+          const ang = t.driftPhase + frac * 5.2 + k * 1.7;
+          const rad = t.radius * 0.3 * (0.4 + frac * 0.6);
+          items.push({
+            x: t.x + Math.cos(ang) * rad, y: ground + 16 + frac * 300, z: t.z + Math.sin(ang) * rad,
+            w: 34 + frac * 95, h: 28 + frac * 62,
+            r: 1, g: 0.99, b: 0.94, a: (1 - frac) * 0.5 * liftF + 0.05,
+          });
+        }
+      }
+      const td = snapshot.touchdown;
+      if (td && td.age < 1.4 && glider.speed > 2) {
+        const fx2 = Math.sin(glider.heading);
+        const fz2 = -Math.cos(glider.heading);
+        const gy = terrainHeight(glider.x, glider.z);
+        for (let k = 0; k < 7; k++) {
+          const back = 4 + k * 1.9 + td.age * 3;
+          const spread = (treeHash(k * 7 + 3, Math.floor(td.age * 9)) - 0.5) * 8;
+          items.push({
+            x: glider.x - fx2 * back - fz2 * spread,
+            y: gy + 1.6 + k * 0.7,
+            z: glider.z - fz2 * back + fx2 * spread,
+            w: 4.5 + k * 1.8, h: 3 + k * 1.3,
+            r: 0.97, g: 0.99, b: 1, a: 0.38 * (1 - k / 8),
+          });
+        }
+      }
+      if (items.length) {
+        updateDynSprites(items);
+        drawSprites(dynSprites, proj, viewM, basis.right, basis.up, [1, 1, 1, 1], 0, 0, fog);
+      }
+    }
     gl.depthMask(true);
     gl.disable(gl.BLEND);
 
@@ -964,6 +849,23 @@ export function createRenderer(glCanvas, fxCanvas) {
     drawHorizonGauge(W * 0.5, dashY + 74, 52, glider);
     drawVarioGauge(W * 0.5 - 128, dashY + 74, 40, snapshot.verticalSpeed || 0);
     drawCompassGauge(W * 0.5 + 128, dashY + 74, 40, glider.heading);
+    drawSpeedGauge(W * 0.5 - 256, dashY + 74, 40, glider.speed);
+  }
+
+  function drawSpeedGauge(x, y, r, speedMs) {
+    gaugeShell(x, y, r, "SPEED km/h");
+    const kmh = Math.round(speedMs * 3.6);
+    const dial = Math.PI * 0.75 + (clamp(speedMs, 0, 42) / 42) * Math.PI * 1.5;
+    fx.strokeStyle = speedMs < 13.5 ? "#e35d4f" : "#e8f4f8";
+    fx.lineWidth = 3.4;
+    fx.beginPath();
+    fx.moveTo(x, y);
+    fx.lineTo(x + Math.cos(dial) * (r - 9), y + Math.sin(dial) * (r - 9));
+    fx.stroke();
+    fx.fillStyle = "#e8f4f8";
+    fx.font = `700 ${r * 0.42}px "Segoe UI", sans-serif`;
+    fx.textAlign = "center";
+    fx.fillText(String(kmh), x, y + r * 0.52);
   }
 
   function gaugeShell(x, y, r, label) {

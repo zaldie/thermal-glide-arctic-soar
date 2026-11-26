@@ -54,6 +54,7 @@ let packageDroppedAt = null;
 let view = "chase";
 let message = null;
 let result = null;
+let touchdown = null; // { sink, speedKmh, grade, age, pending } during roll-out
 let stallCount = 0;
 let wasStalled = false;
 let lastFrame = performance.now();
@@ -141,10 +142,17 @@ function startFlight(resume = null) {
   stallCount = 0;
   wasStalled = false;
   result = null;
+  touchdown = null;
   view = "chase";
   mode = "flying";
   showMessage(mission.objective === "free" ? "Free Soar — the sky is yours" : `${mission.name} — ring 1 ahead`, 3);
   say(`Flying ${mission.name}`);
+}
+
+function gradeFor(sink) {
+  if (sink >= -1.2) return "GREASED IT";
+  if (sink >= -2.2) return "GENTLE";
+  return "FIRM";
 }
 
 function applyShotScene() {
@@ -156,9 +164,27 @@ function applyShotScene() {
   Object.assign(glider, g);
   sky.dayPhase = shotScene.dayPhase;
   view = shotScene.view;
+  // Age the sky so the thermals stand at working strength, the way they
+  // do a minute into a real flight, not at their birth ramp.
+  const simSteps = Math.round((shotScene.simSeconds || 0) / 0.5);
+  for (let i = 0; i < simSteps; i++) stepSky(sky, 0.5);
+  sky.dayPhase = shotScene.dayPhase;
   // Compose the HUD numbers the way a real moment in this scene would read.
-  seconds = 42;
-  score = 300;
+  seconds = shotScene.seconds ?? 42;
+  score = shotScene.score ?? 300;
+  if (shotScene.ringIndex) {
+    ringIndex = Math.min(shotScene.ringIndex, rings.length);
+    for (let i = 0; i < ringIndex; i++) rings[i].passed = true;
+  }
+  if (shotScene.touchdown) {
+    touchdown = {
+      sink: shotScene.touchdown.sink,
+      speedKmh: Math.round(glider.speed * 3.6),
+      grade: gradeFor(shotScene.touchdown.sink),
+      age: 0.5,
+      pending: null,
+    };
+  }
   showMessage("", 0);
   message = null;
 }
@@ -235,6 +261,18 @@ function finishFlight(finished, title, reason, landingNote = null) {
   say(`${title}. ${reason} Score ${Math.round(score)}.`);
 }
 
+function beginTouchdown(finished, title, reason, landingNote) {
+  // A real landing earns a roll-out: two seconds of spray and the grade
+  // on screen before the results panel takes over.
+  touchdown = {
+    sink: glider.verticalSpeed,
+    speedKmh: Math.round(glider.speed * 3.6),
+    grade: gradeFor(glider.verticalSpeed),
+    age: 0,
+    pending: { finished, title, reason, note: landingNote },
+  };
+}
+
 function judgeTouchdown() {
   // Called the first frame the glider reaches the ground.
   const groundY = terrainHeight(glider.x, glider.z);
@@ -265,9 +303,9 @@ function judgeTouchdown() {
     }
     const objectivesDone = rings.every((r) => r.passed) && (mission.objective !== "drop" || dropped === true);
     if (objectivesDone || mission.objective === "free") {
-      finishFlight(true, mission.objective === "free" ? "DOWN SAFE" : "SORTIE COMPLETE", mission.objective === "free" ? "A free flight, ended the way every flight should end: on the strip, grinning." : "Every objective flown and a landing the strip crew would applaud.", landingNote);
+      beginTouchdown(true, mission.objective === "free" ? "DOWN SAFE" : "SORTIE COMPLETE", mission.objective === "free" ? "A free flight, ended the way every flight should end: on the strip, grinning." : "Every objective flown and a landing the strip crew would applaud.", landingNote);
     } else {
-      finishFlight(false, "DOWN, BUT NOT DONE", "You landed safely — but the sortie's work was not finished, so it does not count as complete.", landingNote);
+      beginTouchdown(false, "DOWN, BUT NOT DONE", "You landed safely — but the sortie's work was not finished, so it does not count as complete.", landingNote);
     }
     return;
   }
@@ -317,6 +355,29 @@ function saveContinueAndQuit() {
 // ---------- Per-frame update ----------
 
 function updateFlight(dt) {
+  if (touchdown) {
+    // Roll-out: the flight is judged, the glider just sheds speed on
+    // the strip while the spray flies and the grade shows.
+    stepSky(sky, dt);
+    if (!shotScene) {
+      touchdown.age += dt;
+      glider.speed = Math.max(0, glider.speed - 8.5 * dt);
+      glider.x += Math.sin(glider.heading) * glider.speed * dt;
+      glider.z += -Math.cos(glider.heading) * glider.speed * dt;
+      glider.y = terrainHeight(glider.x, glider.z) + 1.6;
+      glider.pitch *= 0.88;
+      glider.roll *= 0.88;
+      glider.verticalSpeed = 0;
+      seconds += dt;
+      audio.update(dt, glider);
+      if (touchdown.age > 2.0 && touchdown.pending) {
+        const p = touchdown.pending;
+        touchdown = null;
+        finishFlight(p.finished, p.title, p.reason, p.note);
+      }
+    }
+    return;
+  }
   const flightInput = input.sample(save.settings);
   if (input.consume("KeyC")) view = view === "chase" ? "cockpit" : "chase";
   if (input.consume("KeyP")) { mode = "paused"; return; }
@@ -360,7 +421,7 @@ function snapshot() {
     groundY,
     sinkWarning: glider ? glider.verticalSpeed < -4.2 && air.lift < 0.5 : false,
     stormWarning: sky?.squall.active && Math.abs(glider.x - sky.squall.x) < sky.squall.width * 1.8,
-    message, dropped, result, save,
+    message, dropped, result, save, touchdown,
     menuItems: menuItems(),
     menuIndex,
   };
