@@ -161,6 +161,7 @@ export function createRenderer(glCanvas, fxCanvas) {
   const lampMesh = uploadGeometry(scenery.lamp);
   const beamMesh = uploadGeometry(scenery.beam);
   const lightBase = scenery.lightBase;
+  const parcelMesh = uploadGeometry(scenery.parcel);
 
   const torusMesh = uploadGeometry(buildTorusGeometry(0.055, 40, 10));
   const discMesh = uploadGeometry(buildRingGeometry(0.02, 1, 40));
@@ -378,7 +379,8 @@ export function createRenderer(glCanvas, fxCanvas) {
     const fwdY = Math.sin(glider.pitch);
     // Buffet: a stalled wing shudders, an oversped airframe trembles —
     // the camera feels both before the pilot reads either.
-    const buffet = glider.stalled ? 0.016 : glider.overspeed ? 0.007 : 0;
+    const stressShake = (glider.stress || 0) > 0.55 ? (glider.stress - 0.55) * 0.022 : 0;
+    const buffet = (glider.stalled ? 0.016 : glider.overspeed ? 0.007 : 0) + stressShake;
     const shX = Math.sin(time * 43.7) * buffet;
     const shY = Math.cos(time * 51.3) * buffet;
     if (view === "cockpit") {
@@ -533,6 +535,14 @@ export function createRenderer(glCanvas, fxCanvas) {
       drawMesh(discMesh, mat4Multiply(viewProj, zm), zm, { emissive: 0.3, alpha: 0.16 });
       gl.depthMask(true);
       gl.disable(gl.BLEND);
+    }
+
+    // The mail parcel, under its canopy, on its way down to the circle.
+    if (snapshot.parcel) {
+      const p = snapshot.parcel;
+      const cs = Math.cos(p.spin || 0), sn = Math.sin(p.spin || 0);
+      const pm = mat4Model(p.x, p.y, p.z, cs, 0, -sn, 0, 1, 0, sn, 0, cs, 1);
+      drawMesh(parcelMesh, mat4Multiply(viewProj, pm), pm);
     }
 
     // Checkpoint rings, billboarded so they always read as gates.

@@ -54,6 +54,7 @@ let scoreParts = { rings: 0, drop: 0, landing: 0, stalls: 0 };
 let seconds = 0;
 let dropped = null; // null = carrying, true/false once released (drop quality)
 let packageDroppedAt = null;
+let parcel = null; // the released mail parcel, falling under its canopy
 let view = "chase";
 let message = null;
 let result = null;
@@ -143,6 +144,7 @@ function startFlight(resume = null) {
   seconds = resume?.seconds ?? 0;
   dropped = mission.objective === "drop" ? (resume?.dropped ?? null) : undefined;
   packageDroppedAt = null;
+  parcel = null;
   stallCount = 0;
   wasStalled = false;
   result = null;
@@ -191,6 +193,13 @@ function applyShotScene() {
   }
   showMessage("", 0);
   message = null;
+  // A scene may stage the mail parcel mid-fall, the frame a second after
+  // a real release: score already banked, parcel under its canopy.
+  if (shotScene.parcel) {
+    parcel = { ...shotScene.parcel, vx: 0, vz: 0, vy: -11, spin: 0.6 };
+    dropped = true;
+  }
+  if (shotScene.message) showMessage(shotScene.message, 30);
 }
 
 // ---------- Flight rules ----------
@@ -233,6 +242,15 @@ function tryDrop() {
     showMessage("The mail drifts into the fjord… no points for the drop", 3);
   }
   packageDroppedAt = { x: glider.x, z: glider.z };
+  // The parcel leaves with the glider's own velocity and settles under
+  // its canopy — the pilot watches the mail go down, not just a message.
+  parcel = {
+    x: glider.x, y: glider.y - 2, z: glider.z,
+    vx: Math.sin(glider.heading) * glider.speed * 0.92,
+    vz: -Math.cos(glider.heading) * glider.speed * 0.92,
+    vy: glider.verticalSpeed - 1,
+    spin: 0,
+  };
 }
 
 function finishFlight(finished, title, reason, landingNote = null) {
@@ -404,6 +422,21 @@ function updateFlight(dt) {
     scoreParts.stalls += SCORE.stallPenalty;
     score = Math.max(0, score - SCORE.stallPenalty);
   }
+  if (events.airframeFailed) {
+    finishFlight(false, "AIRFRAME FAILURE", "The wing spar gave way. Overspeed and steep, fast turns had been writing cheques the structure could not cash — ease off past 155 km/h, and bank gently when you are fast.");
+    return;
+  }
+  // The parcel drifts down under its canopy until it meets the ground.
+  if (parcel) {
+    parcel.vy = Math.max(parcel.vy - 26 * dt, -13);
+    parcel.vx *= 1 - 0.55 * dt;
+    parcel.vz *= 1 - 0.55 * dt;
+    parcel.x += parcel.vx * dt;
+    parcel.y += parcel.vy * dt;
+    parcel.z += parcel.vz * dt;
+    parcel.spin += dt * 0.7;
+    if (parcel.y <= terrainHeight(parcel.x, parcel.z) + 1.2) parcel = null;
+  }
   seconds += dt;
   checkRingPass(prev);
 
@@ -433,7 +466,7 @@ function snapshot() {
     groundY,
     sinkWarning: glider ? glider.verticalSpeed < -4.2 && air.lift < 0.5 : false,
     stormWarning: sky?.squall.active && Math.abs(glider.x - sky.squall.x) < sky.squall.width * 1.8,
-    message, dropped, result, save, touchdown,
+    message, dropped, parcel, result, save, touchdown,
     menuItems: menuItems(),
     menuIndex,
   };

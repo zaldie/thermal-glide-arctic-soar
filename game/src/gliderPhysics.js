@@ -23,6 +23,9 @@ export function createGliderState(x, y, z, headingRad, speed) {
     verticalSpeed: 0, // m/s, filled by stepGlider for the variometer
     stalled: false,
     overspeed: false, // past the placard speed: the airframe complains
+    stress: 0, // 0..1 accumulated airframe stress: overspeed and hard,
+    // fast turns write it, gentle flying lets it fade only slowly
+    stressFailed: false, // the spar gave way: the sortie is over
     aileron: 0, // -1..1 control deflections, mirrored to the 3D model
     elevator: 0,
     airbrake: false,
@@ -33,9 +36,9 @@ export function createGliderState(x, y, z, headingRad, speed) {
 
 // input: { pitchInput -1..1 (up positive), rollInput -1..1, airbrake bool }
 // air:   { lift } vertical movement of the air itself in m/s (thermalSky)
-// Returns events the game cares about: stall start, overspeed.
+// Returns events the game cares about: stall start, airframe failure.
 export function stepGlider(state, input, air, dt) {
-  const events = { stallStarted: false };
+  const events = { stallStarted: false, airframeFailed: false };
   // Controls: pitch eases toward the pilot's ask, roll follows stick or keys.
   const targetPitch = input.pitchInput * 0.42 - 0.03;
   state.pitch += (targetPitch - state.pitch) * Math.min(1, dt * 3.2);
@@ -47,6 +50,20 @@ export function stepGlider(state, input, air, dt) {
   state.aileron += (input.rollInput - state.aileron) * Math.min(1, dt * 10);
   state.elevator += (input.pitchInput - state.elevator) * Math.min(1, dt * 10);
   state.overspeed = state.speed > 40;
+
+  // Airframe stress: a coordinated turn's load factor is 1/cos(bank), so a
+  // steep bank at speed bends the wing far more than the same bank flown
+  // slowly; past the placard speed the whole structure complains at once.
+  // Stress fades only slowly — the airframe remembers a rough sortie, and
+  // at full stress the spar fails outright.
+  const loadFactor = 1 / Math.cos(THREE_Q(state.roll));
+  const stressRate = Math.max(0, loadFactor - 1.75) * 0.11 + Math.max(0, state.speed - 40) * 0.0075;
+  if (stressRate > 0) state.stress = Math.min(1, state.stress + stressRate * dt);
+  else state.stress = Math.max(0, state.stress - 0.004 * dt);
+  if (state.stress >= 1 && !state.stressFailed) {
+    state.stressFailed = true;
+    events.airframeFailed = true;
+  }
 
   // Heading changes with bank: a coordinated turn, faster when banked hard.
   const turnRate = Math.tan(THREE_Q(state.roll)) * 9.81 / Math.max(12, state.speed);

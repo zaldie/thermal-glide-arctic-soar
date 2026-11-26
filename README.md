@@ -9,6 +9,11 @@ bounty, $500 in USDC. You pilot the Kestrel, an engineless glider, over the
 fictional Svarra Archipelago: a winding fjord, snow peaks, a fishing village
 and an ice runway. There is no throttle and no fuel — height is your fuel
 tank, speed is how you spend it, and the only way back up is a thermal.
+Speed is not free either: past the placard speed, or in steep turns flown
+fast, the airframe accumulates stress — watch the STRUCT bar — and a spar
+pushed past its limit fails in the air. The mail run is flown for real,
+too: release over Port Svarra and the parcel falls under its own canopy
+while you turn for the strip.
 
 ## The signature: a Living Sky
 

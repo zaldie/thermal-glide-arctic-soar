@@ -76,6 +76,19 @@ export function drawHud(ctx, W, H, snap) {
     ctx.fillText("OVERSPEED", ox + 43, 148);
     ctx.textAlign = "left";
   }
+  if ((glider.stress || 0) >= 0.75) {
+    // The structure is near its limit: one more hard, fast turn can end
+    // the sortie. Same pill row, after the brake and overspeed tags.
+    const px = 216 + (glider.airbrake ? 48 : 0) + (glider.overspeed ? 94 : 0);
+    ctx.fillStyle = "#c33d2e";
+    roundRect(ctx, px, 134, 80, 20, 5);
+    ctx.fill();
+    ctx.fillStyle = "#ffe9e2";
+    ctx.font = '800 12px "Segoe UI", sans-serif';
+    ctx.textAlign = "center";
+    ctx.fillText("AIRFRAME", px + 40, 148);
+    ctx.textAlign = "left";
+  }
 
   // --- Top-right: mission, score, clock.
   panel(ctx, W - 268, 16, 252, 118, 0.62);
@@ -95,6 +108,7 @@ export function drawHud(ctx, W, H, snap) {
   // --- Variometer + energy, right side under the mission block.
   drawVarioBar(ctx, W - 58, 182, 276, glider.verticalSpeed);
   drawEnergyBar(ctx, 30, 182, 276, glider, snap.groundY);
+  drawStructBar(ctx, 86, 182, 276, glider.stress || 0);
 
   // --- Objectives, bottom-left.
   panel(ctx, 16, H - 108, 330, 92, 0.5);
@@ -219,10 +233,27 @@ function drawEnergyBar(ctx, x, y, h, glider, groundY) {
   ctx.fillStyle = "#ffcf4d";
   ctx.fillRect(x + 3, y + h - t * h, 24, t * h);
   ctx.fillStyle = "#eaf6fb";
-  ctx.font = '700 14px "Segoe UI", sans-serif';
+  ctx.font = '700 12px "Segoe UI", sans-serif';
   ctx.textAlign = "center";
   ctx.fillText("ENERGY", x + 15, y - 8);
   ctx.fillText(`${Math.round(energy)}m`, x + 15, y + h + 18);
+  ctx.restore();
+}
+
+// Airframe stress, drawn as the energy bar's neighbour: it fills from
+// the bottom and changes colour as the structure approaches its limit.
+function drawStructBar(ctx, x, y, h, stress) {
+  const t = clamp(stress, 0, 1);
+  ctx.save();
+  ctx.fillStyle = "rgba(8,15,22,0.55)";
+  ctx.fillRect(x, y, 30, h);
+  ctx.fillStyle = t < 0.5 ? "#57e389" : t < 0.75 ? "#ffb84d" : "#e35d4f";
+  ctx.fillRect(x + 3, y + h - t * h, 24, t * h);
+  ctx.fillStyle = "#eaf6fb";
+  ctx.font = '700 12px "Segoe UI", sans-serif';
+  ctx.textAlign = "center";
+  ctx.fillText("STRUCT", x + 15, y - 8);
+  ctx.fillText(`${Math.round(t * 100)}%`, x + 15, y + h + 18);
   ctx.restore();
 }
 

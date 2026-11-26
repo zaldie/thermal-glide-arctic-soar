@@ -1,10 +1,11 @@
-// worldScenery.js — the static world as geometry: forest, village,
-// runway, lighthouse, boats and dock.
+// worldScenery.js — the world as geometry: forest, village, runway,
+// lighthouse, boats and dock, plus the one prop that moves, the mail
+// parcel (built here once, positioned per frame by the renderer).
 // One job: build the raw vertex buffers for everything in Svarra that
-// never moves, so renderWorld.js only uploads and draws them. Houses
-// are jittered in rotation, scale and paint so the village reads as
-// built by people, not stamped by a die; boats ride the fjord by the
-// harbour. Pure arrays out — no GL calls here.
+// is not the glider or the terrain, so renderWorld.js only uploads and
+// draws them. Houses are jittered in rotation, scale and paint so the
+// village reads as built by people, not stamped by a die; boats ride
+// the fjord by the harbour. Pure arrays out — no GL calls here.
 
 import { MeshBuilder } from "./glMesh.js";
 import { terrainHeight, surfaceAt, RUNWAY, VILLAGE, LIGHTHOUSE, WORLD_HALF, fjordCentreX } from "./terrainSvarra.js";
@@ -145,5 +146,20 @@ export function buildSceneryGeometries() {
     lamp: lamp.build(),
     beam,
     lightBase,
+    parcel: buildParcelGeometry(),
   };
+}
+
+// The mail parcel in local space, origin at the crate's centre: a
+// strapped wooden crate under a square canopy (two slabs crossed at
+// 45 degrees, so it reads as a parachute from any chase angle).
+export function buildParcelGeometry() {
+  const b = new MeshBuilder();
+  b.box(0, 0, 0, 1.7, 1.1, 1.7, [0.6, 0.44, 0.25], 0.03);
+  b.box(0, 0, 0, 1.78, 1.16, 0.32, [0.35, 0.26, 0.16], 0.03);
+  b.box(-0.5, 0.95, 0, 0.07, 0.9, 0.07, [0.3, 0.3, 0.32], 0.02);
+  b.box(0.5, 0.95, 0, 0.07, 0.9, 0.07, [0.3, 0.3, 0.32], 0.02);
+  b.box(0, 1.45, 0, 3.6, 0.22, 3.6, [0.93, 0.95, 0.97], 0.02);
+  b.box(0, 1.45, 0, 3.6, 0.22, 3.6, [0.88, 0.9, 0.93], 0.02, Math.PI / 4);
+  return b.build();
 }
