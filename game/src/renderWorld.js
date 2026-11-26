@@ -620,9 +620,9 @@ export function createRenderer(glCanvas, fxCanvas) {
       return { x: glider.x, y: glider.y + 1.2, z: glider.z, fwdX, fwdY, fwdZ, roll: glider.roll * 0.55 };
     }
     return {
-      x: glider.x - fwdX * 30,
-      y: glider.y + 10 - fwdY * 30,
-      z: glider.z - fwdZ * 30,
+      x: glider.x - fwdX * 21,
+      y: glider.y + 7.2 - fwdY * 21,
+      z: glider.z - fwdZ * 21,
       fwdX, fwdY: fwdY * 0.82 - 0.06, fwdZ,
       roll: glider.roll * 0.4,
     };
@@ -808,7 +808,7 @@ export function createRenderer(glCanvas, fxCanvas) {
       const gm = mat4Model(glider.x, glider.y, glider.z,
         gb.right[0], gb.right[1], gb.right[2],
         gb.up[0], gb.up[1], gb.up[2],
-        -gb.fwd[0], -gb.fwd[1], -gb.fwd[2]);
+        -gb.fwd[0], -gb.fwd[1], -gb.fwd[2], 1.18);
       const mvp = mat4Multiply(viewProj, gm);
       drawMesh(gliderMesh, mvp, gm);
       drawMesh(canopyMesh, mvp, gm);
