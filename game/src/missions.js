@@ -1,4 +1,4 @@
-// missions.js — the five Svarra sorties and Free Soar.
+// missions.js — the six Svarra sorties and Free Soar.
 // One job: describe each mission as data — start, rings, objectives, scoring
 // targets — so main.js runs them and the menu can list them. A ring is a
 // gate in the sky: fly through its disc and it counts, gold centre included.
@@ -27,8 +27,9 @@ export const MISSIONS = [
     id: "first-glide",
     name: "1 · First Glide",
     brief: "Three rings, one gentle thermal, then home. Learn the sky.",
+    taskLine: "Thread the three training rings",
     start: startSouthOfRunway(330),
-    sky: { startPhase: 0.08, squall: false },
+    sky: { startPhase: 0.08, squall: false, windX: 2.2, windZ: 0.7 },
     rings: [
       ring(RUNWAY.centreX - 260, RUNWAY.groundY + 300, RUNWAY.centreZ + 620),
       ring(RUNWAY.centreX + 240, RUNWAY.groundY + 265, RUNWAY.centreZ - 60),
@@ -43,8 +44,9 @@ export const MISSIONS = [
     id: "fjord-run",
     name: "2 · Fjord Run",
     brief: "Six rings down the winding fjord in a crosswind. Stay low, stay quick.",
+    taskLine: "Race the fjord gates",
     start: { x: -500, y: 430, z: 2500, heading: 0.5, speed: 27 },
-    sky: { startPhase: 0.16, squall: false },
+    sky: { startPhase: 0.16, squall: false, windX: 6.4, windZ: -1.8 },
     rings: [
       ring(-180, 380, 1500),
       ring(240, 330, 620),
@@ -62,8 +64,9 @@ export const MISSIONS = [
     id: "supply-drop",
     name: "3 · Supply Drop",
     brief: "Carry the mail to Port Svarra: release over the drop circle, then land.",
+    taskLine: "Run the mail to Port Svarra",
     start: startSouthOfRunway(380, 26, -300),
-    sky: { startPhase: 0.24, squall: false },
+    sky: { startPhase: 0.24, squall: false, windX: 3.6, windZ: 1.4 },
     rings: [
       ring(RUNWAY.centreX - 420, RUNWAY.groundY + 330, RUNWAY.centreZ + 500),
       ring(DROP_ZONE.x - 100, RUNWAY.groundY + 250, DROP_ZONE.z + 520),
@@ -78,8 +81,9 @@ export const MISSIONS = [
     id: "storm-line",
     name: "4 · Storm Line",
     brief: "A squall is marching in from the west. Five rings before it eats the route.",
+    taskLine: "Beat the squall to the last ring",
     start: { x: -1400, y: 470, z: 900, heading: 0.9, speed: 28 },
-    sky: { startPhase: 0.38, squall: true, squallSpeed: 21 },
+    sky: { startPhase: 0.38, squall: true, squallSpeed: 21, windX: 7.5, windZ: 2.6 },
     rings: [
       ring(-700, 420, 250),
       ring(60, 380, -350),
@@ -96,8 +100,9 @@ export const MISSIONS = [
     id: "aurora-run",
     name: "5 · Aurora Run",
     brief: "Night. Weak lift, lit rings, and a landing judged to the metre.",
+    taskLine: "Chase lit rings under the aurora",
     start: startSouthOfRunway(360, 26, 200),
-    sky: { startPhase: 0.82, squall: false, phaseLength: 900 },
+    sky: { startPhase: 0.82, squall: false, phaseLength: 900, windX: 1.1, windZ: 0.4 },
     rings: [
       ring(RUNWAY.centreX - 520, RUNWAY.groundY + 330, RUNWAY.centreZ + 780),
       ring(RUNWAY.centreX + 430, RUNWAY.groundY + 310, RUNWAY.centreZ + 120),
@@ -110,6 +115,26 @@ export const MISSIONS = [
     precisionLanding: true,
     starTimes: [230, 300, 400],
     seed: 67,
+  },
+  {
+    id: "dead-calm",
+    name: "6 · Dead Calm",
+    brief: "Dusk, and the sky has gone to sleep: almost no lift anywhere. Four low rings on one tank of height — every metre is spent, none is earned back.",
+    taskLine: "Four low rings, one tank of height",
+    start: startSouthOfRunway(300, 25, -100),
+    sky: { startPhase: 0.46, squall: false, windX: 0.8, windZ: 0.3 },
+    thermalScale: 0.15,
+    rings: [
+      ring(RUNWAY.centreX - 300, RUNWAY.groundY + 215, RUNWAY.centreZ + 700),
+      ring(RUNWAY.centreX + 260, RUNWAY.groundY + 185, RUNWAY.centreZ + 60),
+      ring(RUNWAY.centreX - 180, RUNWAY.groundY + 160, RUNWAY.centreZ - 520),
+      ring(RUNWAY.centreX, RUNWAY.groundY + 140, RUNWAY.centreZ - 980),
+    ],
+    objective: "rings",
+    landAtRunway: true,
+    precisionLanding: true,
+    starTimes: [170, 230, 320],
+    seed: 83,
   },
 ];
 

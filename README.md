@@ -20,7 +20,7 @@ The day slides from golden afternoon through blue dusk into aurora night,
 the thermals fade as the light goes, and a snow squall marches across the
 map carrying a downdraft you can see coming.
 
-## Five sorties, plus Free Soar
+## Six sorties, plus Free Soar
 
 1. **First Glide** — three rings, one gentle thermal, then home.
 2. **Fjord Run** — six rings down the winding fjord in a crosswind.
@@ -28,6 +28,11 @@ map carrying a downdraft you can see coming.
    drop circle from a safe height, then land.
 4. **Storm Line** — five rings before the squall eats the route.
 5. **Aurora Run** — night flight, lit rings, a landing judged to the metre.
+6. **Dead Calm** — dusk with the sky asleep: almost no lift anywhere, so
+   four low rings must be flown on one tank of height, spent carefully.
+
+Every sortie flies in its own weather — the wind differs from mission to
+mission, and the HUD's wind arrow is worth reading before the approach.
 
 Stars, best scores and a mid-sortie Continue are saved in the browser
 (localStorage). Landings are judged honestly: sink rate, touchdown speed,
@@ -60,6 +65,9 @@ mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 Every source file has one job, named for it: `terrainSvarra.js` (the
 heightmap and landmarks), `gliderPhysics.js` (the energy flight model),
 `thermalSky.js` (the Living Sky), `missions.js` (the sorties as data),
+`glMath.js` (matrices), `glMesh.js` (geometry builders), `glShaders.js`
+(the shader sources), `aircraftMesh.js` (the airframe, control surfaces
+included), `worldScenery.js` (forest, village, boats, runway, lighthouse),
 `renderWorld.js` (the painter), `hud.js` (instruments and screens),
 `inputPilot.js`, `audioVariometer.js` (synthesized variometer, wind and
 chimes — no audio files), `saveGame.js`, and `shots.js` (the deterministic

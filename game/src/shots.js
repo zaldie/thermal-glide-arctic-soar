@@ -25,16 +25,18 @@ export const SHOT_SCENES = {
     score: 300,
     seconds: 42,
   },
-  // Cockpit: instruments lit, circling inside a strong thermal — the
-  // variometer needle lives on the lift side here.
+  // Cockpit: Fjord Run in its crosswind — instruments lit, canopy frame
+  // around the pilot, a thermal's gulls ahead and the first gate gold
+  // in the windscreen. The wind readout differs from the cover's calm
+  // on purpose: every sortie's sky is its own.
   cockpit: {
-    missionIndex: 0,
+    missionIndex: 1,
     view: "cockpit",
-    glider: { x: 120, y: 350, z: -1500, heading: -0.22, pitch: 0.02, roll: 0.3, speed: 23 },
-    dayPhase: 0.3,
+    glider: { x: -150, y: 395, z: 1950, heading: -0.05, pitch: 0.02, roll: 0.3, speed: 24 },
+    dayPhase: 0.22,
     simSeconds: 40,
-    score: 450,
-    seconds: 65,
+    score: 300,
+    seconds: 58,
   },
   // Aurora run: night, lit rings in sequence, lighthouse sweeping.
   aurora: {

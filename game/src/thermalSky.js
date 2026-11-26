@@ -31,8 +31,9 @@ export function createSky(seed, options = {}) {
     // 0 = golden afternoon, 0.5 = blue dusk, 1 = aurora night.
     dayPhase: options.startPhase ?? 0.08,
     phaseLength: options.phaseLength ?? 420, // seconds for a full cycle
-    windX: 2.2,
-    windZ: 0.7,
+    windX: options.windX ?? 2.2,
+    windZ: options.windZ ?? 0.7,
+    thermalScale: options.thermalScale ?? 1,
     thermals,
     rand,
     squall: {
@@ -105,7 +106,7 @@ export function stepSky(sky, dt) {
     // Strength envelope: ramp up, hold, sigh out.
     const lifeT = age / t.life;
     t.envelope = lifeT < 0.18 ? lifeT / 0.18 : lifeT > 0.78 ? (1 - lifeT) / 0.22 : 1;
-    t.currentLift = t.peakLift * t.envelope * scale;
+    t.currentLift = t.peakLift * t.envelope * scale * sky.thermalScale;
   }
   if (sky.squall.active) {
     sky.squall.x += sky.squall.speed * dt;

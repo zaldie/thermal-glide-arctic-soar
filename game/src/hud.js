@@ -63,6 +63,19 @@ export function drawHud(ctx, W, H, snap) {
     ctx.fillText("BRK", 237, 148);
     ctx.textAlign = "left";
   }
+  if (glider.overspeed) {
+    // Past the placard speed the airframe is complaining — say so,
+    // in the same row as the brake tag.
+    const ox = glider.airbrake ? 264 : 216;
+    ctx.fillStyle = "#c33d2e";
+    roundRect(ctx, ox, 134, 86, 20, 5);
+    ctx.fill();
+    ctx.fillStyle = "#ffe9e2";
+    ctx.font = '800 12px "Segoe UI", sans-serif';
+    ctx.textAlign = "center";
+    ctx.fillText("OVERSPEED", ox + 43, 148);
+    ctx.textAlign = "left";
+  }
 
   // --- Top-right: mission, score, clock.
   panel(ctx, W - 268, 16, 252, 118, 0.62);
@@ -125,7 +138,7 @@ export function drawHud(ctx, W, H, snap) {
     ctx.fillText(`TOUCHDOWN ${td.sink.toFixed(1)} m/s`, cx, cy - 6);
     ctx.font = '700 19px "Segoe UI", sans-serif';
     ctx.fillStyle = "#eaf6fb";
-    ctx.fillText(`${td.grade} · at ${td.speedKmh} km/h`, cx, cy + 26);
+    ctx.fillText(`${td.grade} · at ${td.speedKmh} km/h${td.bonus ? ` · precision +${td.bonus}` : ""}`, cx, cy + 26);
   }
   if (snap.dropped === false && mission.objective === "drop") {
     ctx.font = '600 16px "Segoe UI", sans-serif';
@@ -142,12 +155,15 @@ function objectiveLines(snap) {
     return ["FREE SOAR — ride the thermals", "Land at the ice runway when ready (or Esc)"];
   }
   const lines = [];
-  if (ringIndex < mission.rings.length) lines.push(`▸ Fly through ring ${ringIndex + 1} of ${mission.rings.length}`);
-  else lines.push("✓ All rings flown");
+  if (ringIndex < mission.rings.length) {
+    lines.push(mission.taskLine
+      ? `▸ ${mission.taskLine} · ring ${ringIndex + 1}/${mission.rings.length}`
+      : `▸ Fly through ring ${ringIndex + 1} of ${mission.rings.length}`);
+  } else lines.push("✓ All rings flown");
   if (mission.objective === "drop") {
     lines.push(dropped ? "✓ Mail away over Port Svarra" : "▸ Drop the mail over Port Svarra (X)");
   }
-  if (mission.landAtRunway) lines.push(landed ? "✓ Down safe" : "▸ Land on the ice runway, gently");
+  if (mission.landAtRunway) lines.push(landed ? "✓ Down safe" : mission.precisionLanding ? "▸ Land on the numbers, gently" : "▸ Land on the ice runway, gently");
   return lines.slice(0, 3);
 }
 
@@ -384,8 +400,15 @@ export function drawResultScreen(ctx, W, H, snap) {
   }
   ctx.font = '600 20px "Segoe UI", sans-serif';
   ctx.fillStyle = "#dceef5";
+  const breakdown = r.parts ? [
+    r.parts.rings ? `rings +${r.parts.rings}` : null,
+    r.parts.drop ? `drop +${r.parts.drop}` : null,
+    r.parts.landing ? `landing +${r.parts.landing}` : null,
+    r.parts.stalls ? `stalls −${r.parts.stalls}` : null,
+  ].filter(Boolean).join("  ·  ") : "";
   const rows = [
     `Score  ${Math.round(r.score)}`,
+    breakdown || null,
     `Time  ${formatTime(r.seconds)}`,
     `Rings  ${r.ringsFlown}/${snap.mission.rings.length}`,
     r.landingNote ? `Landing  ${r.landingNote}` : null,

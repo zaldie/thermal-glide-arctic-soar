@@ -19,7 +19,7 @@ export function buildAircraftGeometries() {
       [-4.8, 0.02], [-4.3, 0.18], [-3.4, 0.38], [-2.4, 0.52], [-1.2, 0.6],
       [0.2, 0.62], [1.4, 0.56], [2.6, 0.44], [3.4, 0.3], [3.8, 0.22],
     ], 16, white, 0.4);
-    // Engine nozzle.
+    // Tail cone.
     body.lathe([[3.8, 0.22], [3.95, 0.27], [4.08, 0.2]], 12, dark, 0.2);
     // Two-panel swept wings: white inner, grey outer, kinked like the art.
     body.wing(0.25, 3.1, -0.08, -1.15, -0.15, 2.0, 1.25, 0.09, white, 0.2);
@@ -63,6 +63,18 @@ export function buildAircraftGeometries() {
   strobe.sphere(0, 0.15, 3.9, 0.22, [1, 1, 1], 0);
   const burner = new MeshBuilder();
   burner.sphere(0, 0, 4.02, 0.17, [0.3, 0.85, 1.0], 0);
+  // Control surfaces, built in hinge-local space (hinge line at the
+  // origin, surface extending outward and aft) so renderWorld can
+  // swing them around their hinges with the pilot's stick.
+  const grey = [0.78, 0.82, 0.86];
+  const aileronR = new MeshBuilder();
+  aileronR.box(1.05, 0, 0.22, 2.1, 0.05, 0.44, grey, 0.2);
+  const aileronL = new MeshBuilder();
+  aileronL.box(-1.05, 0, 0.22, 2.1, 0.05, 0.44, grey, 0.2);
+  const elevatorR = new MeshBuilder();
+  elevatorR.box(0.75, 0, 0.18, 1.5, 0.045, 0.36, grey, 0.2);
+  const elevatorL = new MeshBuilder();
+  elevatorL.box(-0.75, 0, 0.18, 1.5, 0.045, 0.36, grey, 0.2);
   return {
     body: body.build(),
     canopy: canopy.build(),
@@ -71,5 +83,9 @@ export function buildAircraftGeometries() {
     navLights: navLights.build(),
     strobe: strobe.build(),
     burner: burner.build(),
+    aileronR: aileronR.build(),
+    aileronL: aileronL.build(),
+    elevatorR: elevatorR.build(),
+    elevatorL: elevatorL.build(),
   };
 }

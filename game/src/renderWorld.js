@@ -5,13 +5,16 @@
 // then finish the frame with the 2D cockpit, speed streaks and vignette on
 // the overlay canvas. No game rules live here; main.js hands it a snapshot.
 
-import { terrainHeight, surfaceAt, terrainColorAt, RUNWAY, VILLAGE, LIGHTHOUSE, WORLD_HALF } from "./terrainSvarra.js";
+import { terrainHeight, terrainColorAt, RUNWAY, LIGHTHOUSE, WORLD_HALF } from "./terrainSvarra.js";
 import { skyPalette } from "./thermalSky.js";
 import { clamp } from "./gliderPhysics.js";
 import {
   MeshBuilder, buildTerrainGeometry, buildRingGeometry, buildTorusGeometry,
-  mat4Perspective, mat4Multiply, mat4View, mat4Model, mat4Identity,
 } from "./glMesh.js";
+import {
+  mat4Perspective, mat4Multiply, mat4View, mat4Model, mat4Identity,
+} from "./glMath.js";
+import { buildSceneryGeometries, treeHash } from "./worldScenery.js";
 import {
   FOG_NEAR, FOG_FAR, LIT_VERT, LIT_FRAG, SKY_VERT, SKY_FRAG,
   SPRITE_VERT, SPRITE_FRAG, FLAT_VERT, FLAT_FRAG,
@@ -38,11 +41,6 @@ function compileProgram(gl, vertSrc, fragSrc) {
   return prog;
 }
 
-function treeHash(ix, iz) {
-  let n = ix * 2246822519 + iz * 3266489917;
-  n = (n ^ (n >> 15)) * 2654435761;
-  return (((n ^ (n >> 13)) >>> 0) % 1000) / 1000;
-}
 
 const rgb255 = (c) => [c[0] / 255, c[1] / 255, c[2] / 255];
 
@@ -153,93 +151,16 @@ export function createRenderer(glCanvas, fxCanvas) {
   // ---------- Static scene, built once ----------
   const terrainMesh = uploadGeometry(buildTerrainGeometry(terrainHeight, terrainColorAt, WORLD_HALF, 416));
 
-  const forest = new MeshBuilder();
-  {
-    const cell = 150;
-    const span = Math.floor(WORLD_HALF / cell);
-    for (let ix = -span; ix <= span; ix++) {
-      for (let iz = -span; iz <= span; iz++) {
-        if (treeHash(ix, iz) > 0.34) continue;
-        const jx = ix * cell + (treeHash(ix + 40, iz) - 0.5) * 80;
-        const jz = iz * cell + (treeHash(ix, iz + 40) - 0.5) * 80;
-        const gy = terrainHeight(jx, jz);
-        if (gy < 18 || gy > 215) continue;
-        const surf = surfaceAt(jx, jz, gy);
-        if (surf !== "snow" && surf !== "shore" && surf !== "tundra") continue;
-        const s = 0.8 + treeHash(ix - 40, iz + 9) * 0.55;
-        const shade = 0.85 + treeHash(ix + 7, iz - 40) * 0.35;
-        const fol = [0.13 * shade, 0.28 * shade, 0.22 * shade];
-        forest.box(jx, gy + 1.5 * s, jz, 0.55 * s, 3 * s, 0.55 * s, [0.29, 0.22, 0.15], 0.02);
-        if (treeHash(ix + 99, iz - 99) > 0.55) {
-          // Round-crowned pine: a ball of foliage with a snowy cap.
-          forest.sphere(jx, gy + 7.6 * s, jz, 3.6 * s, fol, 0.03);
-          forest.cone(jx, gy + 11.2 * s, jz, 1.5 * s, 4.2 * s, 6, [0.93, 0.96, 0.98], 0.05);
-        } else {
-          forest.cone(jx, gy + 2.6 * s, jz, 3.5 * s, 9.5 * s, 7, fol, 0.03);
-          forest.cone(jx, gy + 7.2 * s, jz, 2.4 * s, 7.5 * s, 7, fol, 0.03);
-          forest.cone(jx, gy + 12.6 * s, jz, 0.95 * s, 2.4 * s, 6, [0.93, 0.96, 0.98], 0.05);
-        }
-      }
-    }
-  }
-  const forestMesh = uploadGeometry(forest.build());
-
-  const village = new MeshBuilder();
-  const windows = new MeshBuilder();
-  for (let i = 0; i < VILLAGE.houses; i++) {
-    const hx = VILLAGE.x + ((i * 67) % 220) - 110;
-    const hz = VILLAGE.z + ((i * 113) % 200) - 100;
-    const gy = terrainHeight(hx, hz);
-    const rotY = ((i % 4) - 1.5) * 0.14;
-    const wall = i % 3 === 0 ? [0.71, 0.31, 0.18] : [0.48, 0.29, 0.20];
-    village.box(hx, gy + 4.5, hz, 16, 9, 13, wall, 0.04, rotY);
-    village.roof(hx, gy + 9, hz, 18.5, 5, 15.5, [0.91, 0.89, 0.83], 0.05, rotY);
-    const cos = Math.cos(rotY), sin = Math.sin(rotY);
-    for (const dx of [-3.6, 3.6]) {
-      const wx = hx + dx * cos - 6.56 * sin;
-      const wz = hz + dx * sin + 6.56 * cos;
-      windows.box(wx, gy + 4.6, wz, 1.7, 1.7, 0.24, [1.0, 0.77, 0.38], 0, rotY);
-    }
-  }
-  const villageMesh = uploadGeometry(village.build());
-  const windowsMesh = uploadGeometry(windows.build());
-
-  const runway = new MeshBuilder();
-  runway.box(RUNWAY.centreX, RUNWAY.groundY - 0.1, RUNWAY.centreZ, RUNWAY.width, 1, RUNWAY.length, [0.74, 0.80, 0.84], 0.06);
-  for (let i = -4; i < 5; i++) {
-    runway.box(RUNWAY.centreX, RUNWAY.groundY + 0.55, RUNWAY.centreZ + i * 62 + 15, 1.6, 0.08, 30, [0.95, 0.97, 0.98], 0.02);
-  }
-  runway.box(RUNWAY.centreX, RUNWAY.groundY + 0.55, RUNWAY.centreZ + RUNWAY.length / 2 - 14, RUNWAY.width - 6, 0.08, 2.4, [1.0, 0.81, 0.3], 0.02);
-  const runwayMesh = uploadGeometry(runway.build());
-
-  const lightBase = terrainHeight(LIGHTHOUSE.x, LIGHTHOUSE.z);
-  const lighthouse = new MeshBuilder();
-  lighthouse.cylinder(LIGHTHOUSE.x, lightBase, LIGHTHOUSE.z, 3.1, 40, 12, [0.91, 0.89, 0.85], 0.06);
-  lighthouse.cylinder(LIGHTHOUSE.x, lightBase + 21, LIGHTHOUSE.z, 3.16, 7, 12, [0.76, 0.24, 0.16], 0.06);
-  lighthouse.cylinder(LIGHTHOUSE.x, lightBase + 40, LIGHTHOUSE.z, 3.7, 1.4, 12, [0.16, 0.18, 0.2], 0.1);
-  const lighthouseMesh = uploadGeometry(lighthouse.build());
-  const lamp = new MeshBuilder();
-  lamp.sphere(LIGHTHOUSE.x, lightBase + 43, LIGHTHOUSE.z, 1.9, [1.0, 0.84, 0.43], 0.2);
-  const lampMesh = uploadGeometry(lamp.build());
-  // The rotating beam: a long flat cone of light along +Z from the lamp.
-  const beamGeo = (() => {
-    const positions = [0, 0, 0], normals = [0, 1, 0], colors = [1, 0.9, 0.6], specs = [0], indices = [];
-    const segs = 12, len = 340, rad = 30;
-    for (let i = 0; i <= segs; i++) {
-      const a = (i / segs) * Math.PI * 2;
-      positions.push(Math.cos(a) * rad, Math.sin(a) * rad, len);
-      normals.push(0, 1, 0);
-      colors.push(1, 0.9, 0.6);
-      specs.push(0);
-    }
-    for (let i = 0; i < segs; i++) indices.push(0, i + 1, i + 2);
-    return {
-      positions: new Float32Array(positions), normals: new Float32Array(normals),
-      colors: new Float32Array(colors), specs: new Float32Array(specs),
-      indices: new Uint32Array(indices),
-    };
-  })();
-  const beamMesh = uploadGeometry(beamGeo);
+  const scenery = buildSceneryGeometries();
+  const forestMesh = uploadGeometry(scenery.forest);
+  const villageMesh = uploadGeometry(scenery.village);
+  const windowsMesh = uploadGeometry(scenery.windows);
+  const boatsMesh = uploadGeometry(scenery.boats);
+  const runwayMesh = uploadGeometry(scenery.runway);
+  const lighthouseMesh = uploadGeometry(scenery.lighthouse);
+  const lampMesh = uploadGeometry(scenery.lamp);
+  const beamMesh = uploadGeometry(scenery.beam);
+  const lightBase = scenery.lightBase;
 
   const torusMesh = uploadGeometry(buildTorusGeometry(0.055, 40, 10));
   const discMesh = uploadGeometry(buildRingGeometry(0.02, 1, 40));
@@ -255,6 +176,19 @@ export function createRenderer(glCanvas, fxCanvas) {
   const navLightsMesh = uploadGeometry(aircraft.navLights);
   const strobeMesh = uploadGeometry(aircraft.strobe);
   const burnerMesh = uploadGeometry(aircraft.burner);
+  const aileronRMesh = uploadGeometry(aircraft.aileronR);
+  const aileronLMesh = uploadGeometry(aircraft.aileronL);
+  const elevatorRMesh = uploadGeometry(aircraft.elevatorR);
+  const elevatorLMesh = uploadGeometry(aircraft.elevatorL);
+
+  // A control surface's model matrix: the airframe's, then out to the
+  // hinge, then swung around it by the deflection angle.
+  function surfaceMatrix(gm, hx, hy, hz, theta) {
+    const t = mat4Model(hx, hy, hz, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1);
+    const c = Math.cos(theta), s = Math.sin(theta);
+    const r = mat4Model(0, 0, 0, 1, 0, 0, 0, c, s, 0, -s, c, 1);
+    return mat4Multiply(gm, mat4Multiply(t, r));
+  }
 
   // ---------- Sprites: clouds and runway edge lights ----------
   const puffTexture = (() => {
@@ -438,12 +372,17 @@ export function createRenderer(glCanvas, fxCanvas) {
   }
 
   // ---------- Camera, same maths as the old projector ----------
-  function cameraFor(glider, view) {
+  function cameraFor(glider, view, time = 0) {
     const fwdX = Math.sin(glider.heading) * Math.cos(glider.pitch);
     const fwdZ = -Math.cos(glider.heading) * Math.cos(glider.pitch);
     const fwdY = Math.sin(glider.pitch);
+    // Buffet: a stalled wing shudders, an oversped airframe trembles —
+    // the camera feels both before the pilot reads either.
+    const buffet = glider.stalled ? 0.016 : glider.overspeed ? 0.007 : 0;
+    const shX = Math.sin(time * 43.7) * buffet;
+    const shY = Math.cos(time * 51.3) * buffet;
     if (view === "cockpit") {
-      return { x: glider.x, y: glider.y + 1.2, z: glider.z, fwdX, fwdY, fwdZ, roll: glider.roll * 0.55 };
+      return { x: glider.x + shX * 8, y: glider.y + 1.2 + shY * 8, z: glider.z, fwdX, fwdY: fwdY + shY, fwdZ, roll: glider.roll * 0.55 + shX * 0.6 };
     }
     // Near the ground the camera tips down a little further, so the
     // glider stays framed through the flare and the roll-out instead
@@ -451,11 +390,11 @@ export function createRenderer(glCanvas, fxCanvas) {
     const gap = glider.y - terrainHeight(glider.x, glider.z);
     const groundTilt = clamp(1 - gap / 160, 0, 1) * 0.15;
     return {
-      x: glider.x - fwdX * 21,
-      y: glider.y + 7.2 - fwdY * 21,
+      x: glider.x - fwdX * 21 + shX * 10,
+      y: glider.y + 7.2 - fwdY * 21 + shY * 10,
       z: glider.z - fwdZ * 21,
-      fwdX, fwdY: fwdY * 0.82 - 0.06 - groundTilt, fwdZ,
-      roll: glider.roll * 0.4,
+      fwdX, fwdY: fwdY * 0.82 - 0.06 - groundTilt + shY, fwdZ,
+      roll: glider.roll * 0.4 + shX * 0.5,
     };
   }
 
@@ -499,7 +438,7 @@ export function createRenderer(glCanvas, fxCanvas) {
   function draw(snapshot) {
     const { glider, sky, rings, activeRing, view, time, dropZone } = snapshot;
     const palette = skyPalette(sky.dayPhase);
-    const cam = cameraFor(glider, view);
+    const cam = cameraFor(glider, view, time);
     const basis = cameraBasis(cam);
     const aspect = W / Math.max(1, H);
     const tanF = 0.5 / 0.92;
@@ -561,6 +500,7 @@ export function createRenderer(glCanvas, fxCanvas) {
     drawMesh(terrainMesh, viewProj, identity);
     drawMesh(forestMesh, viewProj, identity);
     drawMesh(villageMesh, viewProj, identity);
+    drawMesh(boatsMesh, viewProj, identity);
     drawMesh(windowsMesh, viewProj, identity, { emissive: clamp(0.85 - palette.sun, 0, 0.8) });
     drawMesh(runwayMesh, viewProj, identity);
     drawMesh(lighthouseMesh, viewProj, identity);
@@ -645,9 +585,19 @@ export function createRenderer(glCanvas, fxCanvas) {
       const mvp = mat4Multiply(viewProj, gm);
       drawMesh(gliderMesh, mvp, gm);
       drawMesh(canopyMesh, mvp, gm);
+      // The surfaces answer the stick: ailerons swing opposite each
+      // other with the roll input, the elevators together with pitch.
+      const ailR = surfaceMatrix(gm, 3.45, -0.06, 0.55, -glider.aileron * 0.38);
+      drawMesh(aileronRMesh, mat4Multiply(viewProj, ailR), ailR);
+      const ailL = surfaceMatrix(gm, -3.45, -0.06, 0.55, glider.aileron * 0.38);
+      drawMesh(aileronLMesh, mat4Multiply(viewProj, ailL), ailL);
+      const eleR = surfaceMatrix(gm, 0.35, 0.04, 3.3, glider.elevator * 0.3);
+      drawMesh(elevatorRMesh, mat4Multiply(viewProj, eleR), eleR);
+      const eleL = surfaceMatrix(gm, -0.35, 0.04, 3.3, glider.elevator * 0.3);
+      drawMesh(elevatorLMesh, mat4Multiply(viewProj, eleL), eleL);
       if (glider.airbrake) drawMesh(brakesMesh, mvp, gm);
       drawMesh(accentsMesh, mvp, gm, { emissive: 1.5 });
-      drawMesh(burnerMesh, mvp, gm, { emissive: 2.0 });
+      drawMesh(burnerMesh, mvp, gm, { emissive: 0.5 });
       drawMesh(navLightsMesh, mvp, gm, { emissive: 1.3 });
       if (Math.sin(time * 2.4) > 0.72) drawMesh(strobeMesh, mvp, gm, { emissive: 1.6 });
     }
@@ -821,7 +771,11 @@ export function createRenderer(glCanvas, fxCanvas) {
 
   function drawCockpit(glider, snapshot) {
     const dashY = H * 0.78;
-    fx.fillStyle = "#141a20";
+    const dashGrad = fx.createLinearGradient(0, dashY - 40, 0, H);
+    dashGrad.addColorStop(0, "#1a222b");
+    dashGrad.addColorStop(0.25, "#141a20");
+    dashGrad.addColorStop(1, "#0b0f14");
+    fx.fillStyle = dashGrad;
     fx.beginPath();
     fx.moveTo(0, H);
     fx.lineTo(0, dashY + 26);
@@ -846,6 +800,26 @@ export function createRenderer(glCanvas, fxCanvas) {
     fx.lineTo(W, dashY + 20);
     fx.closePath();
     fx.fill();
+    // Canopy frame: two slim A-pillars raked in from the top corners —
+    // the pilot sits inside a bubble, and the frame is what tells the
+    // eye so. Kept thin: a glider's frame is a whisper, not a cage.
+    fx.strokeStyle = "#10151b";
+    fx.lineCap = "round";
+    fx.lineWidth = 7;
+    fx.beginPath();
+    fx.moveTo(W * 0.205, -6);
+    fx.lineTo(W * 0.295, dashY - 6);
+    fx.moveTo(W * 0.795, -6);
+    fx.lineTo(W * 0.705, dashY - 6);
+    fx.stroke();
+    fx.strokeStyle = "rgba(160,200,220,0.22)";
+    fx.lineWidth = 1.6;
+    fx.beginPath();
+    fx.moveTo(W * 0.2, -6);
+    fx.lineTo(W * 0.29, dashY - 6);
+    fx.moveTo(W * 0.8, -6);
+    fx.lineTo(W * 0.71, dashY - 6);
+    fx.stroke();
     drawHorizonGauge(W * 0.5, dashY + 74, 52, glider);
     drawVarioGauge(W * 0.5 - 128, dashY + 74, 40, snapshot.verticalSpeed || 0);
     drawCompassGauge(W * 0.5 + 128, dashY + 74, 40, glider.heading);
@@ -876,6 +850,19 @@ export function createRenderer(glCanvas, fxCanvas) {
     fx.strokeStyle = "#3f5a68";
     fx.lineWidth = 2.5;
     fx.stroke();
+    // Glass: a soft crescent of reflected light across the top of the
+    // dial, so the instrument reads as a thing behind glass, not a sticker.
+    fx.save();
+    fx.beginPath();
+    fx.arc(x, y, r - 2, 0, Math.PI * 2);
+    fx.clip();
+    const glass = fx.createRadialGradient(x - r * 0.35, y - r * 0.55, r * 0.1, x, y, r * 1.25);
+    glass.addColorStop(0, "rgba(190,225,240,0.20)");
+    glass.addColorStop(0.45, "rgba(190,225,240,0.05)");
+    glass.addColorStop(0.7, "rgba(190,225,240,0)");
+    fx.fillStyle = glass;
+    fx.fillRect(x - r, y - r, r * 2, r * 2);
+    fx.restore();
     fx.fillStyle = "#9fd8e8";
     fx.font = `600 ${Math.max(9, r * 0.24)}px "Segoe UI", sans-serif`;
     fx.textAlign = "center";

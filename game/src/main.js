@@ -48,6 +48,9 @@ let sky = null;
 let rings = [];
 let ringIndex = 0;
 let score = 0;
+// Where the score came from, line by line — the results screen reads
+// this out, so a pilot can see what the sortie actually paid for.
+let scoreParts = { rings: 0, drop: 0, landing: 0, stalls: 0 };
 let seconds = 0;
 let dropped = null; // null = carrying, true/false once released (drop quality)
 let packageDroppedAt = null;
@@ -130,12 +133,13 @@ function startFlight(resume = null) {
     glider.roll = resume.glider.roll || 0;
   }
   if (start.airbrake) glider.airbrake = true;
-  sky = createSky(mission.seed, mission.sky);
+  sky = createSky(mission.seed, { ...mission.sky, thermalScale: mission.thermalScale ?? 1 });
   if (resume?.dayPhase != null) sky.dayPhase = resume.dayPhase;
   rings = mission.rings.map((r) => ({ ...r, passed: false }));
   ringIndex = resume?.ringIndex ?? 0;
   for (let i = 0; i < ringIndex; i++) if (rings[i]) rings[i].passed = true;
   score = resume?.score ?? 0;
+  scoreParts = { rings: 0, drop: 0, landing: 0, stalls: 0 };
   seconds = resume?.seconds ?? 0;
   dropped = mission.objective === "drop" ? (resume?.dropped ?? null) : undefined;
   packageDroppedAt = null;
@@ -200,6 +204,7 @@ function checkRingPass(prev) {
     ring.passed = true;
     const centreBonus = d < ring.radius * 0.38;
     score += centreBonus ? SCORE.ringCentre : SCORE.ringEdge;
+    scoreParts.rings += centreBonus ? SCORE.ringCentre : SCORE.ringEdge;
     audio.ringPassed(centreBonus);
     showMessage(centreBonus ? `Ring ${ringIndex + 1} — dead centre! +${SCORE.ringCentre}` : `Ring ${ringIndex + 1} +${SCORE.ringEdge}`);
     ringIndex++;
@@ -219,6 +224,7 @@ function tryDrop() {
     dropped = true;
     const accurate = dist < zone.radius * 0.45 && heightAbove < 190;
     score += accurate ? SCORE.dropAccurate : SCORE.dropNear;
+    scoreParts.drop += accurate ? SCORE.dropAccurate : SCORE.dropNear;
     audio.dropped();
     showMessage(accurate ? `Mail away — right over the circle! +${SCORE.dropAccurate}` : `Mail away +${SCORE.dropNear}`, 3);
   } else {
@@ -241,6 +247,7 @@ function finishFlight(finished, title, reason, landingNote = null) {
     score: Math.round(score), seconds, stars,
     ringsFlown: rings.filter((r) => r.passed).length,
     isBest,
+    parts: { ...scoreParts },
   };
   if (mission.objective !== "free") {
     recordResult(save, mission, result);
@@ -261,13 +268,14 @@ function finishFlight(finished, title, reason, landingNote = null) {
   say(`${title}. ${reason} Score ${Math.round(score)}.`);
 }
 
-function beginTouchdown(finished, title, reason, landingNote) {
+function beginTouchdown(finished, title, reason, landingNote, precisionBonus = 0) {
   // A real landing earns a roll-out: two seconds of spray and the grade
   // on screen before the results panel takes over.
   touchdown = {
     sink: glider.verticalSpeed,
     speedKmh: Math.round(glider.speed * 3.6),
     grade: gradeFor(glider.verticalSpeed),
+    bonus: precisionBonus,
     age: 0,
     pending: { finished, title, reason, note: landingNote },
   };
@@ -295,17 +303,20 @@ function judgeTouchdown() {
   if (onRunway && sink > -3.4 && glider.speed < 30 && Math.abs(glider.roll) < 0.4 && headingError < 0.5) {
     // A real landing.
     let landingNote = `touchdown at ${Math.round(glider.speed * 3.6)} km/h, sink ${sink.toFixed(1)} m/s`;
+    let precisionBonus = 0;
     if (mission.precisionLanding) {
       const distTarget = Math.hypot(glider.x - RUNWAY.centreX, glider.z - (RUNWAY.centreZ + RUNWAY.length / 2 - 90));
       const precision = Math.max(0, Math.round(SCORE.landingPrecisionMax * (1 - distTarget / 320)));
       score += precision;
+      scoreParts.landing += precision;
+      precisionBonus = precision;
       landingNote += ` · precision +${precision} (${Math.round(distTarget)} m from the numbers)`;
     }
     const objectivesDone = rings.every((r) => r.passed) && (mission.objective !== "drop" || dropped === true);
     if (objectivesDone || mission.objective === "free") {
-      beginTouchdown(true, mission.objective === "free" ? "DOWN SAFE" : "SORTIE COMPLETE", mission.objective === "free" ? "A free flight, ended the way every flight should end: on the strip, grinning." : "Every objective flown and a landing the strip crew would applaud.", landingNote);
+      beginTouchdown(true, mission.objective === "free" ? "DOWN SAFE" : "SORTIE COMPLETE", mission.objective === "free" ? "A free flight, ended the way every flight should end: on the strip, grinning." : "Every objective flown and a landing the strip crew would applaud.", landingNote, precisionBonus);
     } else {
-      beginTouchdown(false, "DOWN, BUT NOT DONE", "You landed safely — but the sortie's work was not finished, so it does not count as complete.", landingNote);
+      beginTouchdown(false, "DOWN, BUT NOT DONE", "You landed safely — but the sortie's work was not finished, so it does not count as complete.", landingNote, precisionBonus);
     }
     return;
   }
@@ -390,6 +401,7 @@ function updateFlight(dt) {
   const events = stepGlider(glider, flightInput, air, dt);
   if (events.stallStarted) {
     stallCount++;
+    scoreParts.stalls += SCORE.stallPenalty;
     score = Math.max(0, score - SCORE.stallPenalty);
   }
   seconds += dt;

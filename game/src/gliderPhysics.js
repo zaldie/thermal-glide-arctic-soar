@@ -22,6 +22,9 @@ export function createGliderState(x, y, z, headingRad, speed) {
     speed, // m/s along the flight direction
     verticalSpeed: 0, // m/s, filled by stepGlider for the variometer
     stalled: false,
+    overspeed: false, // past the placard speed: the airframe complains
+    aileron: 0, // -1..1 control deflections, mirrored to the 3D model
+    elevator: 0,
     airbrake: false,
     crashed: false,
     gearDown: true,
@@ -39,6 +42,11 @@ export function stepGlider(state, input, air, dt) {
   const targetRoll = input.rollInput * 1.05;
   state.roll += (targetRoll - state.roll) * Math.min(1, dt * 4.5);
   state.airbrake = !!input.airbrake;
+  // The surfaces follow the stick with a little lag, so the model in the
+  // chase view visibly answers the pilot's hands.
+  state.aileron += (input.rollInput - state.aileron) * Math.min(1, dt * 10);
+  state.elevator += (input.pitchInput - state.elevator) * Math.min(1, dt * 10);
+  state.overspeed = state.speed > 40;
 
   // Heading changes with bank: a coordinated turn, faster when banked hard.
   const turnRate = Math.tan(THREE_Q(state.roll)) * 9.81 / Math.max(12, state.speed);

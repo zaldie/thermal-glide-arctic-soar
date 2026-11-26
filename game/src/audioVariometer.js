@@ -76,7 +76,7 @@ export function createAudio(settings) {
       settings.volume = v;
     },
     // Called every frame with the flight state.
-    update(dt, { verticalSpeed, speed, stalled }) {
+    update(dt, { verticalSpeed, speed, stalled, overspeed }) {
       if (!ctx) return;
       beepClock += dt;
       // Beep pattern: silent in sink, urgent and high in strong lift.
@@ -98,7 +98,10 @@ export function createAudio(settings) {
       }
       varioGain.gain.setTargetAtTime(level, ctx.currentTime, 0.03);
       varioOsc.frequency.setTargetAtTime(freq, ctx.currentTime, 0.05);
-      const wind = Math.min(0.2, 0.02 + speed * 0.0026);
+      let wind = Math.min(0.2, 0.02 + speed * 0.0026);
+      // Overspeed: the wind noise flutters and rattles — the airframe
+      // creaking under load, audible before it is readable.
+      if (overspeed) wind *= 1 + Math.sin(beepClock * 31) * 0.35;
       windGain.gain.setTargetAtTime(wind, ctx.currentTime, 0.1);
       windFilter.frequency.setTargetAtTime(320 + speed * 14, ctx.currentTime, 0.1);
     },
