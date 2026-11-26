@@ -4,12 +4,12 @@
 // birds, checkpoint rings and the glider itself (chase view) or its cockpit
 // (cockpit view). No game rules live here; main.js hands it a snapshot.
 
-import { terrainHeight, surfaceAt, SURFACE_COLOURS, RUNWAY, VILLAGE, LIGHTHOUSE, WORLD_HALF } from "./terrainSvarra.js";
+import { terrainHeight, surfaceAt, terrainColorAt, RUNWAY, VILLAGE, LIGHTHOUSE, WORLD_HALF } from "./terrainSvarra.js";
 import { skyPalette } from "./thermalSky.js";
 import { clamp } from "./gliderPhysics.js";
 
-const FORWARD_STEPS = [0, 35, 80, 140, 215, 310, 430, 580, 770, 1010, 1310, 1670, 2090, 2570, 3120, 3740, 4430, 5190, 5900];
-const LATERAL_STEPS = [-3400, -2500, -1850, -1350, -980, -700, -480, -310, -180, -80, 0, 80, 180, 310, 480, 700, 980, 1350, 1850, 2500, 3400];
+const FORWARD_STEPS = [0, 18, 40, 68, 105, 150, 205, 275, 360, 465, 595, 750, 935, 1155, 1410, 1705, 2045, 2435, 2880, 3385, 3955, 4600, 5330, 5900];
+const LATERAL_STEPS = [-3400, -2700, -2150, -1700, -1330, -1040, -800, -605, -455, -340, -240, -160, -95, -45, 0, 45, 95, 160, 240, 340, 455, 605, 800, 1040, 1330, 1700, 2150, 2700, 3400];
 
 export function createRenderer(canvas) {
   const ctx = canvas.getContext("2d");
@@ -192,51 +192,69 @@ export function createRenderer(canvas) {
     const rx = -fz;
     const rz = fx;
     // Vertex grid in world space.
+    const rows = FORWARD_STEPS.length;
+    const cols = LATERAL_STEPS.length;
     const verts = [];
-    for (let i = 0; i < FORWARD_STEPS.length; i++) {
+    for (let i = 0; i < rows; i++) {
       const row = [];
-      for (let j = 0; j < LATERAL_STEPS.length; j++) {
+      for (let j = 0; j < cols; j++) {
         const wx = cam.x + fx * FORWARD_STEPS[i] + rx * LATERAL_STEPS[j];
         const wz = cam.z + fz * FORWARD_STEPS[i] + rz * LATERAL_STEPS[j];
         const wy = Math.abs(wx) > WORLD_HALF || Math.abs(wz) > WORLD_HALF ? -12 : terrainHeight(wx, wz);
-        row.push({ wx, wy, wz, p: project(wx, wy, wz) });
+        row.push({ wx, wy, wz, p: project(wx, wy, wz), col: null });
       }
       verts.push(row);
     }
-    // Painter's order: far rows first.
-    for (let i = FORWARD_STEPS.length - 2; i >= 0; i--) {
-      for (let j = 0; j < LATERAL_STEPS.length - 1; j++) {
+    // Per-vertex colour: a continuous colour ramp shaded by the local height
+    // gradient and blended into the fog by the vertex's own depth. Triangles
+    // then average their three corner colours, which is what makes the
+    // ground read as one smooth landscape instead of flat slabs.
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < cols; j++) {
+        const v = verts[i][j];
+        const iPrev = Math.max(0, i - 1);
+        const iNext = Math.min(rows - 1, i + 1);
+        const jPrev = Math.max(0, j - 1);
+        const jNext = Math.min(cols - 1, j + 1);
+        const dF = (verts[iNext][j].wy - verts[iPrev][j].wy) / (FORWARD_STEPS[iNext] - FORWARD_STEPS[iPrev] || 1);
+        const dR = (verts[i][jNext].wy - verts[i][jPrev].wy) / (LATERAL_STEPS[jNext] - LATERAL_STEPS[jPrev] || 1);
+        const slope = Math.hypot(dF, dR);
+        let shade = clamp(1 - dF * 0.55 - dR * 0.25, 0.62, 1.22);
+        shade += (treeHash(Math.round(v.wx / 90), Math.round(v.wz / 90)) - 0.5) * 0.045;
+        // Open water catches the light: a slow travelling shimmer.
+        if (v.wy < 1.5) {
+          shade *= 1 + 0.09 * Math.sin(time * 1.2 + (v.wx * 0.011 + v.wz * 0.017));
+        }
+        const base = terrainColorAt(v.wx, v.wz, v.wy, slope);
+        const fogT = v.p ? clamp((v.p.depth - 380) / 5000, 0, 0.88) : 0.88;
+        v.col = blendCol(shadeCol(base, shade), palette.fog, fogT);
+      }
+    }
+    // Painter's order: far rows first. Each triangle takes the average of
+    // its three corner colours.
+    for (let i = rows - 2; i >= 0; i--) {
+      for (let j = 0; j < cols - 1; j++) {
         const a = verts[i][j];
         const b = verts[i][j + 1];
         const c = verts[i + 1][j + 1];
         const d = verts[i + 1][j];
         if (!a.p || !b.p || !c.p || !d.p) continue;
-        const cx = (a.wx + c.wx) / 2;
-        const cz = (a.wz + c.wz) / 2;
-        const ch = (a.wy + c.wy) / 2;
-        const surface = surfaceAt(cx, cz, ch);
-        const col = SURFACE_COLOURS[surface];
-        // Two-axis hill shading plus a whisper of per-quad noise, so the
-        // snow reads as ground, not graph paper.
-        const grain = (treeHash(Math.round(cx / 90), Math.round(cz / 90)) - 0.5) * 0.07;
-        let baseShade = clamp(0.9 + (a.wy - c.wy) * 0.0034 + (b.wy - d.wy) * 0.0016 + grain, 0.66, 1.14);
-        // Open water catches the light: a slow travelling shimmer.
-        if (surface === "water") {
-          baseShade *= 1 + 0.09 * Math.sin(time * 1.2 + (cx * 0.011 + cz * 0.017));
-        }
-        const fogT = clamp((a.p.depth - 500) / 5200, 0, 0.88);
-        // The quad is drawn as two triangles, each shaded by its own corner
-        // heights: slopes get a soft gradient instead of one flat slab.
-        const shade1 = clamp(baseShade + (a.wy - ch) * 0.0022, 0.62, 1.16);
-        const shade2 = clamp(baseShade + (c.wy - ch) * 0.0022, 0.62, 1.16);
-        ctx.fillStyle = rgb(blendCol(shadeCol(col, shade1), palette.fog, fogT));
+        ctx.fillStyle = rgb([
+          (a.col[0] + b.col[0] + c.col[0]) / 3,
+          (a.col[1] + b.col[1] + c.col[1]) / 3,
+          (a.col[2] + b.col[2] + c.col[2]) / 3,
+        ]);
         ctx.beginPath();
         ctx.moveTo(a.p.x, a.p.y);
         ctx.lineTo(b.p.x, b.p.y);
         ctx.lineTo(c.p.x, c.p.y);
         ctx.closePath();
         ctx.fill();
-        ctx.fillStyle = rgb(blendCol(shadeCol(col, shade2), palette.fog, fogT));
+        ctx.fillStyle = rgb([
+          (a.col[0] + c.col[0] + d.col[0]) / 3,
+          (a.col[1] + c.col[1] + d.col[1]) / 3,
+          (a.col[2] + c.col[2] + d.col[2]) / 3,
+        ]);
         ctx.beginPath();
         ctx.moveTo(a.p.x, a.p.y);
         ctx.lineTo(c.p.x, c.p.y);

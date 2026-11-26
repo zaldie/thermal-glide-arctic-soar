@@ -137,6 +137,44 @@ export function surfaceAt(x, z, h) {
   return "snow";
 }
 
+// Continuous terrain colour for the renderer: the same country surfaceAt
+// describes, but blended smoothly across boundaries so the ground reads as
+// one landscape instead of a patchwork of flat slabs. Slope is the height
+// gradient magnitude (rise over run) at the point.
+function mixCol(a, b, t) {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+function blendStep(edge0, edge1, x) {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+export function terrainColorAt(x, z, h, slope) {
+  const C = SURFACE_COLOURS;
+  if (h <= SEA_LEVEL + 2.2) {
+    let col = mixCol(C.deepwater, C.water, blendStep(-16, 1.0, h));
+    col = mixCol(col, C.shore, blendStep(1.2, 2.4, h));
+    return col;
+  }
+  const runwayDx = Math.abs(x - RUNWAY.centreX);
+  const runwayDz = Math.abs(z - RUNWAY.centreZ);
+  if (runwayDx <= RUNWAY.width / 2 && runwayDz <= RUNWAY.length / 2) {
+    return [C.runway[0], C.runway[1], C.runway[2]];
+  }
+  // Lowland: shrub and tundra mixed by the same broad patch noise the
+  // discrete classifier uses, so the two agree on where the country is.
+  const patch = smoothNoise(x - 9000, z + 7000, 460);
+  let col = mixCol(C.shrub, C.tundra, blendStep(0.28, 0.55, patch));
+  col = mixCol(C.shore, col, blendStep(2.2, 9, h));
+  // Climbing ground fades into snow along a noisy snowline.
+  const snowLine = 150 + smoothNoise(x + 5000, z - 3000, 180) * 60;
+  col = mixCol(col, C.snow, blendStep(snowLine - 45, snowLine + 25, h));
+  // The high plateau is old ice where it lies flat.
+  col = mixCol(col, C.ice, blendStep(238, 268, h));
+  // Steep faces are bare warm rock, whatever their height.
+  col = mixCol(col, C.rock, blendStep(0.42, 0.72, slope));
+  return col;
+}
+
 export const SURFACE_COLOURS = {
   deepwater: [18, 66, 108],
   water: [34, 110, 142],
