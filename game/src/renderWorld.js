@@ -84,14 +84,79 @@ export function createRenderer(canvas) {
     };
   }
 
-  function drawSky(palette, time) {
+  function drawSky(palette, time, heading = 0) {
     const grad = ctx.createLinearGradient(0, 0, 0, H);
     grad.addColorStop(0, rgb(palette.sky));
     grad.addColorStop(0.55, rgb(palette.horizon));
     grad.addColorStop(1, rgb(palette.fog));
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
+    drawSun(palette, heading);
+    if (palette.aurora > 0.05 || palette.sun < 0.3) drawStars(palette, time);
     if (palette.aurora > 0) drawAurora(palette.aurora, time);
+    drawClouds(palette, time, heading);
+  }
+
+  // The low arctic sun: a disc with a halo that slides toward the horizon
+  // and warms as the day fades. Its screen position follows the heading, so
+  // turning the glider visibly turns the light.
+  function drawSun(palette, heading) {
+    if (palette.sun < 0.12) return;
+    // Sun sits in the south-west; heading 0 (north) puts it left-of-frame.
+    const sunBearing = 3.84; // radians, fixed in the world
+    let rel = sunBearing - heading;
+    while (rel > Math.PI) rel -= Math.PI * 2;
+    while (rel < -Math.PI) rel += Math.PI * 2;
+    if (Math.abs(rel) > 1.5) return;
+    const sx = W / 2 + rel * W * 0.42;
+    const sy = H * (0.52 - palette.sun * 0.3);
+    const r = 26 + palette.sun * 10;
+    const halo = ctx.createRadialGradient(sx, sy, r * 0.4, sx, sy, r * 5.2);
+    halo.addColorStop(0, `rgba(255,214,140,${0.5 * palette.sun})`);
+    halo.addColorStop(1, "rgba(255,190,110,0)");
+    ctx.fillStyle = halo;
+    ctx.fillRect(sx - r * 5.2, sy - r * 5.2, r * 10.4, r * 10.4);
+    ctx.fillStyle = `rgba(255,232,170,${0.55 + palette.sun * 0.4})`;
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawStars(palette, time) {
+    const alpha = clamp(0.25 - palette.sun, 0, 0.85);
+    if (alpha <= 0.02) return;
+    ctx.save();
+    for (let i = 0; i < 110; i++) {
+      // Deterministic star field from the index alone.
+      const sx = ((i * 613) % 997) / 997 * W;
+      const sy = ((i * 389) % 613) / 613 * H * 0.5;
+      const tw = 0.6 + 0.4 * Math.sin(time * (1 + (i % 5) * 0.3) + i);
+      ctx.fillStyle = `rgba(230,240,255,${alpha * tw})`;
+      ctx.fillRect(sx, sy, i % 7 === 0 ? 2.2 : 1.3, i % 7 === 0 ? 2.2 : 1.3);
+    }
+    ctx.restore();
+  }
+
+  // Slow cloud puffs at screen parallax: they drift against the heading so
+  // the world feels deep even before the terrain fills the frame.
+  function drawClouds(palette, time, heading) {
+    ctx.save();
+    const dark = palette.sun < 0.4;
+    for (let i = 0; i < 9; i++) {
+      const baseX = ((i * 331) % 1200) / 1200;
+      const drift = ((time * 0.004 * (1 + (i % 3) * 0.4)) + heading * -0.06) % 1.3;
+      let cx = (baseX + drift) * W - W * 0.15;
+      if (cx > W + 160) cx -= W + 320;
+      const cy = H * (0.08 + ((i * 197) % 300) / 300 * 0.26);
+      const s = 46 + (i % 4) * 26;
+      ctx.fillStyle = dark ? `rgba(30,42,64,0.3)` : `rgba(255,252,246,${0.1 + palette.sun * 0.1})`;
+      for (const [ox, oy, os] of [[0, 0, 1], [-0.7, 0.16, 0.66], [0.72, 0.14, 0.72], [0.1, -0.22, 0.6]]) {
+        ctx.beginPath();
+        ctx.ellipse(cx + ox * s, cy + oy * s, s * os, s * os * 0.36, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
   }
 
   function drawAurora(strength, time) {
@@ -118,7 +183,7 @@ export function createRenderer(canvas) {
     ctx.restore();
   }
 
-  function drawTerrain(cam, project, palette) {
+  function drawTerrain(cam, project, palette, time = 0) {
     const fwdFlatX = cam.fwdX;
     const fwdFlatZ = cam.fwdZ;
     const len = Math.hypot(fwdFlatX, fwdFlatZ) || 1;
@@ -152,7 +217,11 @@ export function createRenderer(canvas) {
         const surface = surfaceAt(cx, cz, ch);
         let col = SURFACE_COLOURS[surface];
         // Simple hill shading from the height difference across the quad.
-        const shade = clamp(0.88 + (a.wy - c.wy) * 0.004, 0.68, 1.12);
+        let shade = clamp(0.88 + (a.wy - c.wy) * 0.004, 0.68, 1.12);
+        // Open water catches the light: a slow travelling shimmer.
+        if (surface === "water") {
+          shade *= 1 + 0.09 * Math.sin(time * 1.2 + (cx * 0.011 + cz * 0.017));
+        }
         const fogT = clamp((a.p.depth - 500) / 5200, 0, 0.88);
         ctx.fillStyle = rgb(blendCol(shadeCol(col, shade), palette.fog, fogT));
         ctx.beginPath();
@@ -160,6 +229,68 @@ export function createRenderer(canvas) {
         ctx.lineTo(b.p.x, b.p.y);
         ctx.lineTo(c.p.x, c.p.y);
         ctx.lineTo(d.p.x, d.p.y);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+  }
+
+  // Pine forest: deterministic trees scattered by a cell hash, drawn only
+  // near the camera where they read as individual trees, not texture.
+  function treeHash(ix, iz) {
+    let n = ix * 2246822519 + iz * 3266489917;
+    n = (n ^ (n >> 15)) * 2654435761;
+    return (((n ^ (n >> 13)) >>> 0) % 1000) / 1000;
+  }
+
+  function drawTrees(project, cam) {
+    const cell = 150;
+    const fwdLen = Math.hypot(cam.fwdX, cam.fwdZ) || 1;
+    const fx = cam.fwdX / fwdLen;
+    const fz = cam.fwdZ / fwdLen;
+    const rx = -fz;
+    const rz = fx;
+    for (let df = 120; df < 2100; df += cell) {
+      for (let dl = -1500; dl <= 1500; dl += cell) {
+        const wx = cam.x + fx * df + rx * dl;
+        const wz = cam.z + fz * df + rz * dl;
+        const ix = Math.round(wx / cell);
+        const iz = Math.round(wz / cell);
+        if (treeHash(ix, iz) > 0.34) continue;
+        const jx = wx + (treeHash(ix + 40, iz) - 0.5) * 80;
+        const jz = wz + (treeHash(ix, iz + 40) - 0.5) * 80;
+        const gy = terrainHeight(jx, jz);
+        if (gy < 18 || gy > 215) continue;
+        if (surfaceAt(jx, jz, gy) !== "snow" && surfaceAt(jx, jz, gy) !== "shore") continue;
+        const base = project(jx, gy, jz);
+        const top = project(jx, gy + 17, jz);
+        if (!base || !top || base.depth > 2100) continue;
+        const s = base.scale;
+        const wHalf = Math.max(1.6, 5.2 * s * 0.14);
+        const trunkH = (base.y - top.y) * 0.24;
+        ctx.strokeStyle = "#4a3826";
+        ctx.lineWidth = Math.max(1, s * 0.16);
+        ctx.beginPath();
+        ctx.moveTo(base.x, base.y);
+        ctx.lineTo(base.x, base.y - trunkH);
+        ctx.stroke();
+        ctx.fillStyle = "#22483a";
+        for (let tier = 0; tier < 2; tier++) {
+          const ty = base.y - trunkH - (base.y - top.y - trunkH) * (tier * 0.42);
+          const tw = wHalf * (1 - tier * 0.34);
+          ctx.beginPath();
+          ctx.moveTo(base.x - tw, ty);
+          ctx.lineTo(base.x, ty - (base.y - top.y) * 0.52);
+          ctx.lineTo(base.x + tw, ty);
+          ctx.closePath();
+          ctx.fill();
+        }
+        // A cap of snow on the crown.
+        ctx.fillStyle = "rgba(240,246,250,0.85)";
+        ctx.beginPath();
+        ctx.moveTo(base.x - wHalf * 0.2, top.y + (base.y - top.y) * 0.1);
+        ctx.lineTo(base.x, top.y);
+        ctx.lineTo(base.x + wHalf * 0.2, top.y + (base.y - top.y) * 0.1);
         ctx.closePath();
         ctx.fill();
       }
@@ -194,6 +325,18 @@ export function createRenderer(canvas) {
       ctx.lineTo(p2.x, p2.y);
       ctx.stroke();
     }
+    // Edge lights: amber dots down both sides, lit as the light fades.
+    const glow = clamp(1.15 - palette.sun, 0.15, 1);
+    for (let dz = -length / 2 + 30; dz < length / 2; dz += 78) {
+      for (const side of [-1, 1]) {
+        const p = project(centreX + side * (width / 2 + 4), groundY + 1.2, centreZ + dz);
+        if (!p || p.depth > 2400) continue;
+        ctx.fillStyle = `rgba(255,178,84,${glow})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(1.4, p.scale * 0.32), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
     // Threshold bar at the landing (south) end.
     const t1 = project(centreX - width / 2 + 3, groundY + 0.5, centreZ + length / 2 - 14);
     const t2 = project(centreX + width / 2 - 3, groundY + 0.5, centreZ + length / 2 - 14);
@@ -207,16 +350,16 @@ export function createRenderer(canvas) {
     }
   }
 
-  function drawVillage(project) {
+  function drawVillage(project, palette) {
     for (let i = 0; i < VILLAGE.houses; i++) {
       const hx = VILLAGE.x + ((i * 67) % 220) - 110;
       const hz = VILLAGE.z + ((i * 113) % 200) - 100;
       const gy = terrainHeight(hx, hz);
-      drawBox(project, hx, gy, hz, 16, 9, 13, i % 3 === 0 ? "#b5502e" : "#7a4a34", "#e8e2d4");
+      drawBox(project, hx, gy, hz, 16, 9, 13, i % 3 === 0 ? "#b5502e" : "#7a4a34", "#e8e2d4", palette);
     }
   }
 
-  function drawBox(project, x, groundY, z, w, h, d, wall, roof) {
+  function drawBox(project, x, groundY, z, w, h, d, wall, roof, palette) {
     const top = project(x, groundY + h, z);
     const base = project(x, groundY, z);
     if (!top || !base || base.depth > 2600) return;
@@ -230,6 +373,13 @@ export function createRenderer(canvas) {
     ctx.lineTo(base.x + (w / 2 + 2) * s * 0.14, top.y + 2);
     ctx.closePath();
     ctx.fill();
+    // Lit windows once the light goes: Port Svarra is inhabited.
+    if (palette && palette.sun < 0.62 && base.depth < 1500) {
+      ctx.fillStyle = `rgba(255,196,96,${clamp(0.75 - palette.sun, 0.2, 0.75)})`;
+      const winW = Math.max(1.2, s * 0.3);
+      ctx.fillRect(base.x - w * s * 0.05, top.y + (base.y - top.y) * 0.45, winW, winW);
+      ctx.fillRect(base.x + w * s * 0.03, top.y + (base.y - top.y) * 0.55, winW, winW);
+    }
   }
 
   function drawLighthouse(project, palette, time) {
@@ -411,7 +561,67 @@ export function createRenderer(canvas) {
       ctx.fillRect(-52 * s, 2 * s, 16 * s, 10 * s);
       ctx.fillRect(36 * s, 2 * s, 16 * s, 10 * s);
     }
+    // Navigation lights: red on the left tip, green on the right, and a
+    // white tail strobe that blinks — tiny, but they sell the dusk shots.
+    ctx.fillStyle = "#ff4444";
+    ctx.beginPath();
+    ctx.arc(-120 * s, 16 * s, 2.6 * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#3dff7a";
+    ctx.beginPath();
+    ctx.arc(120 * s, 16 * s, 2.6 * s, 0, Math.PI * 2);
+    ctx.fill();
+    if (Math.sin(time * 2.4) > 0.72) {
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.beginPath();
+      ctx.arc(0, 29 * s, 2.2 * s, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.restore();
+  }
+
+  // The glider's shadow on the snow below: the cheapest altitude cue there
+  // is, and the one real pilots land by.
+  function drawGliderShadow(project, glider) {
+    const gy = terrainHeight(glider.x, glider.z);
+    const gap = glider.y - gy;
+    if (gap > 260 || gap < 0) return;
+    const p = project(glider.x, gy + 1, glider.z);
+    if (!p) return;
+    const shrink = clamp(1 - gap / 300, 0.25, 1);
+    const rx = clamp(11 * p.scale * shrink, 4, 90);
+    ctx.fillStyle = `rgba(16,24,34,${0.32 * shrink})`;
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, rx, rx * 0.26, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawSpeedStreaks(glider, time) {
+    if (glider.speed < 25) return;
+    ctx.save();
+    ctx.strokeStyle = "rgba(240,248,255,0.32)";
+    ctx.lineWidth = 1.4;
+    for (let i = 0; i < 14; i++) {
+      const seed = (i * 271) % 997;
+      const t = (time * (0.5 + glider.speed * 0.012) + seed / 997) % 1;
+      const edge = i % 2 === 0 ? -1 : 1;
+      const sx = W / 2 + edge * W * (0.3 + t * 0.24);
+      const sy = H * (0.2 + ((seed * 7) % 500) / 500 * 0.6) + t * H * 0.1;
+      const len = 12 + t * 30 * (glider.speed / 30);
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + edge * len, sy + len * 0.24);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawVignette() {
+    const grad = ctx.createRadialGradient(W / 2, H / 2, H * 0.42, W / 2, H / 2, H * 0.86);
+    grad.addColorStop(0, "rgba(6,10,16,0)");
+    grad.addColorStop(1, "rgba(6,10,16,0.3)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
   }
 
   function drawCockpit(glider, snapshot) {
@@ -546,18 +756,24 @@ export function createRenderer(canvas) {
     const palette = skyPalette(sky.dayPhase);
     const cam = cameraFor(glider, view);
     const project = makeProjector(cam);
-    drawSky(palette, time);
-    drawTerrain(cam, project, palette);
+    drawSky(palette, time, glider.heading);
+    drawTerrain(cam, project, palette, time);
+    drawTrees(project, cam);
     drawRunway(project, palette);
-    drawVillage(project);
+    drawVillage(project, palette);
     drawLighthouse(project, palette, time);
     if (dropZone) drawDropZone(project, dropZone);
     drawThermalSpirals(project, sky, time);
     drawBirds(project, sky, glider, time);
     drawRings(project, rings, activeRing, time, palette.aurora);
+    drawGliderShadow(project, glider);
     drawSnowSquallFx(sky, glider, time);
     if (view === "cockpit") drawCockpit(glider, snapshot);
-    else drawGliderChase(glider, time);
+    else {
+      drawGliderChase(glider, time);
+      drawSpeedStreaks(glider, time);
+    }
+    drawVignette();
     return palette;
   }
 
