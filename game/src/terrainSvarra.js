@@ -173,12 +173,15 @@ export function terrainColorAt(x, z, h, slope) {
   col = mixCol(C.shore, col, blendStep(2.2, 9, h));
   // Climbing ground fades into snow along a noisy snowline.
   const snowLine = 150 + smoothNoise(x + 5000, z - 3000, 180) * 60;
-  col = mixCol(col, C.snow, blendStep(snowLine - 45, snowLine + 25, h));
+  col = mixCol(col, C.snow, blendStep(snowLine - 30, snowLine + 15, h));
   // The high plateau is old ice where it lies flat.
   col = mixCol(col, C.ice, blendStep(238, 268, h));
   // Steep faces are bare warm rock, whatever their height.
   col = mixCol(col, C.rock, blendStep(0.42, 0.72, slope));
-  return col;
+  // Fine grain at walking scale, so mid-distance ground carries texture
+  // instead of reading as a smooth, blurry wash.
+  const grain = 0.92 + smoothNoise(x + 31000, z - 17000, 26) * 0.16;
+  return [col[0] * grain, col[1] * grain, col[2] * grain];
 }
 
 export const SURFACE_COLOURS = {

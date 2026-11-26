@@ -13,8 +13,8 @@ import {
   mat4Perspective, mat4Multiply, mat4View, mat4Model, mat4Identity,
 } from "./glMesh.js";
 
-const FOG_NEAR = 420;
-const FOG_FAR = 5600;
+const FOG_NEAR = 950;
+const FOG_FAR = 8200;
 
 const LIT_VERT = `
 attribute vec3 aPos;
@@ -319,7 +319,7 @@ export function createRenderer(glCanvas, fxCanvas) {
   }
 
   // ---------- Static scene, built once ----------
-  const terrainMesh = uploadGeometry(buildTerrainGeometry(terrainHeight, terrainColorAt, WORLD_HALF, 240));
+  const terrainMesh = uploadGeometry(buildTerrainGeometry(terrainHeight, terrainColorAt, WORLD_HALF, 320));
 
   const forest = new MeshBuilder();
   {
@@ -683,9 +683,9 @@ export function createRenderer(glCanvas, fxCanvas) {
     const sunI = palette.sun;
     const fog = rgb255(palette.fog);
     const sunTint = [1.0, 0.72 + 0.24 * sunDir[1], 0.45 + 0.4 * sunDir[1]];
-    const sunColor = [sunTint[0] * (0.2 + 1.0 * sunI), sunTint[1] * (0.2 + 1.0 * sunI), sunTint[2] * (0.2 + 1.0 * sunI)];
+    const sunColor = [sunTint[0] * (0.25 + 1.15 * sunI), sunTint[1] * (0.25 + 1.15 * sunI), sunTint[2] * (0.25 + 1.15 * sunI)];
     const ambient = [
-      0.17 + 0.4 * sunI, 0.2 + 0.37 * sunI, 0.3 + 0.27 * sunI,
+      0.13 + 0.32 * sunI, 0.16 + 0.3 * sunI, 0.26 + 0.22 * sunI,
     ];
 
     gl.clearColor(fog[0], fog[1], fog[2], 1);
