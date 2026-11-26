@@ -151,7 +151,7 @@ export function createRenderer(glCanvas, fxCanvas) {
   }
 
   // ---------- Static scene, built once ----------
-  const terrainMesh = uploadGeometry(buildTerrainGeometry(terrainHeight, terrainColorAt, WORLD_HALF, 320));
+  const terrainMesh = uploadGeometry(buildTerrainGeometry(terrainHeight, terrainColorAt, WORLD_HALF, 416));
 
   const forest = new MeshBuilder();
   {

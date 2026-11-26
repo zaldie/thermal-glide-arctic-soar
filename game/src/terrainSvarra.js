@@ -183,9 +183,13 @@ export function terrainColorAt(x, z, h, slope) {
   // Steep faces are bare warm rock, whatever their height.
   col = mixCol(col, C.rock, blendStep(0.42, 0.72, slope));
   // Fine grain at walking scale, so mid-distance ground carries texture
-  // instead of reading as a smooth, blurry wash.
+  // instead of reading as a smooth, blurry wash — plus a second, finer
+  // octave that speckles each vertex so the surface keeps a tooth even
+  // where the mesh itself is coarse.
   const grain = 0.92 + smoothNoise(x + 31000, z - 17000, 26) * 0.16;
-  return [col[0] * grain, col[1] * grain, col[2] * grain];
+  const micro = 0.96 + smoothNoise(x + 77000, z - 33000, 11) * 0.08;
+  const g = grain * micro;
+  return [col[0] * g, col[1] * g, col[2] * g];
 }
 
 export const SURFACE_COLOURS = {

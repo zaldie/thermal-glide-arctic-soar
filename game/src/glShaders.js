@@ -50,13 +50,18 @@ void main() {
   if (!gl_FrontFacing) n = -n;
   if (vSpec > 0.6) {
     // Open water: a slow, broad ripple walks the normal so the fjord
-    // glitters in swells, not in a checkerboard.
+    // glitters in swells, not in a checkerboard — with a second, finer
+    // octave on top so the surface sparkles instead of smearing.
     n = normalize(n + vec3(
-      sin(vWorld.x * 0.045 + uTime * 1.3) * 0.035, 0.0,
-      cos(vWorld.z * 0.038 + uTime * 1.7) * 0.035));
+      sin(vWorld.x * 0.045 + uTime * 1.3) * 0.035 + sin(vWorld.x * 0.33 + uTime * 2.3) * 0.012, 0.0,
+      cos(vWorld.z * 0.038 + uTime * 1.7) * 0.035 + cos(vWorld.z * 0.29 + uTime * 2.9) * 0.012));
   }
   float diff = clamp((dot(n, uSunDir) + 0.38) / 1.38, 0.0, 1.0);
   vec3 col = vColor * uTint * (uAmbient + uSunColor * diff);
+  // A whisper of saturation on the lit surface: arctic colour reads
+  // richer, edges between biomes stay decisive.
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(vec3(lum), col, 1.07);
   vec3 vdir = normalize(uCamPos - vWorld);
   vec3 hv = normalize(vdir + uSunDir);
   col += uSunColor * pow(max(dot(n, hv), 0.0), 28.0) * vSpec * 0.55;

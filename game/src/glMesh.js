@@ -315,9 +315,18 @@ export function buildTerrainGeometry(terrainHeight, terrainColorAt, worldHalf, s
       normals[k * 3] = nx; normals[k * 3 + 1] = ny; normals[k * 3 + 2] = nz;
       const x = positions[k * 3], h = positions[k * 3 + 1], z = positions[k * 3 + 2];
       const col = terrainColorAt(x, z, h, slope);
-      colors[k * 3] = col[0] / 255;
-      colors[k * 3 + 1] = col[1] / 255;
-      colors[k * 3 + 2] = col[2] / 255;
+      // Baked cavity shading: ground that sits below its neighbours
+      // (gullies, valley floors, the lee of a ridge) darkens a touch,
+      // and crests catch a whisper more light — the relief reads
+      // crisper at distance than flat vertex colour alone.
+      let shade = 1;
+      if (h > 2) {
+        const cavity = (hl + hr + hd + hu) / 4 - h;
+        shade = Math.min(1.06, Math.max(0.8, 1 - cavity * 0.022));
+      }
+      colors[k * 3] = (col[0] / 255) * shade;
+      colors[k * 3 + 1] = (col[1] / 255) * shade;
+      colors[k * 3 + 2] = (col[2] / 255) * shade;
       specs[k] = h < 1.5 ? 0.85 : h > 240 && slope < 0.25 ? 0.3 : 0.04;
     }
   }
