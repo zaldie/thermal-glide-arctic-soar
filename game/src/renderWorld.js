@@ -407,56 +407,71 @@ export function createRenderer(glCanvas, fxCanvas) {
   const discMesh = uploadGeometry(buildRingGeometry(0.02, 1, 40));
   const ringBandMesh = uploadGeometry(buildRingGeometry(0.93, 1, 40));
 
-  // The aircraft as a small scale model — a mini jet-fighter silhouette:
-  // long pointed nose with a pitot spike, swept wings with orange tips,
-  // twin tail fins, side intakes, a teardrop glass canopy and a glowing
-  // tail cone. Pure looks: the physics underneath is still the same
-  // engineless energy model.
+  // The aircraft as a small scale model — the sci-fi jet the user picked
+  // from the concept sheet: white angular fuselage, two-panel swept wings,
+  // downward winglets, twin fins, and cyan light strips along the wing
+  // leading edges, spine and intakes, with a glowing cyan engine core.
+  // Pure looks: the physics underneath is still the same engineless
+  // energy model.
   const gliderBody = new MeshBuilder();
   {
-    const steel = [0.6, 0.64, 0.7];
-    const steelDark = [0.42, 0.46, 0.52];
-    const orange = [0.93, 0.38, 0.19];
-    const dark = [0.1, 0.11, 0.13];
+    const white = [0.92, 0.94, 0.96];
+    const grey = [0.78, 0.82, 0.86];
+    const dark = [0.12, 0.14, 0.17];
     gliderBody.lathe([
-      [-4.6, 0.02], [-4.2, 0.16], [-3.4, 0.34], [-2.4, 0.5], [-1.4, 0.58],
-      [-0.2, 0.6], [1.0, 0.55], [2.2, 0.44], [3.2, 0.3], [3.7, 0.17],
-    ], 12, steel, 0.35);
-    gliderBody.box(0, 0, -4.85, 0.045, 0.045, 0.5, dark, 0.2); // pitot spike
-    // Swept main wings, steel with orange tip panels.
-    gliderBody.wing(0.3, 5.2, -0.05, -1.5, 0.85, 2.4, 0.8, 0.09, steelDark, 0.16);
-    gliderBody.wing(-0.3, -5.2, -0.05, -1.5, 0.85, 2.4, 0.8, 0.09, steelDark, 0.16);
-    gliderBody.wing(4.3, 5.2, -0.05, 0.55, 0.85, 1.05, 0.8, 0.095, orange, 0.16);
-    gliderBody.wing(-4.3, -5.2, -0.05, 0.55, 0.85, 1.05, 0.8, 0.095, orange, 0.16);
+      [-4.8, 0.02], [-4.3, 0.18], [-3.4, 0.38], [-2.4, 0.52], [-1.2, 0.6],
+      [0.2, 0.62], [1.4, 0.56], [2.6, 0.44], [3.4, 0.3], [3.8, 0.22],
+    ], 16, white, 0.4);
+    // Engine nozzle.
+    gliderBody.lathe([[3.8, 0.22], [3.95, 0.27], [4.08, 0.2]], 12, dark, 0.2);
+    // Two-panel swept wings: white inner, grey outer, kinked like the art.
+    gliderBody.wing(0.25, 3.1, -0.08, -1.15, -0.15, 2.0, 1.25, 0.09, white, 0.2);
+    gliderBody.wing(-0.25, -3.1, -0.08, -1.15, -0.15, 2.0, 1.25, 0.09, white, 0.2);
+    gliderBody.wing(3.1, 5.6, -0.08, -0.15, 0.75, 1.25, 0.6, 0.08, grey, 0.2);
+    gliderBody.wing(-3.1, -5.6, -0.08, -0.15, 0.75, 1.25, 0.6, 0.08, grey, 0.2);
+    // Downward winglets at the tips.
+    gliderBody.box(5.58, -0.38, 1.02, 0.07, 0.62, 0.68, grey, 0.16);
+    gliderBody.box(-5.58, -0.38, 1.02, 0.07, 0.62, 0.68, grey, 0.16);
     // Side intakes.
-    gliderBody.box(0.55, -0.12, 0.1, 0.34, 0.42, 1.5, dark, 0.1);
-    gliderBody.box(-0.55, -0.12, 0.1, 0.34, 0.42, 1.5, dark, 0.1);
-    // Swept tailplanes and twin fins with orange tips.
-    gliderBody.wing(0.15, 2.3, 0.05, 2.6, 3.3, 1.0, 0.55, 0.07, steelDark, 0.14);
-    gliderBody.wing(-0.15, -2.3, 0.05, 2.6, 3.3, 1.0, 0.55, 0.07, steelDark, 0.14);
-    gliderBody.box(0.8, 0.75, 3.1, 0.09, 1.15, 0.95, steel, 0.14);
-    gliderBody.box(-0.8, 0.75, 3.1, 0.09, 1.15, 0.95, steel, 0.14);
-    gliderBody.box(0.8, 1.38, 3.1, 0.1, 0.24, 0.95, orange, 0.14);
-    gliderBody.box(-0.8, 1.38, 3.1, 0.1, 0.24, 0.95, orange, 0.14);
+    gliderBody.box(0.52, -0.15, 0.3, 0.36, 0.4, 1.4, dark, 0.12);
+    gliderBody.box(-0.52, -0.15, 0.3, 0.36, 0.4, 1.4, dark, 0.12);
+    // Swept tailplanes and twin fins.
+    gliderBody.wing(0.12, 2.2, 0.02, 2.7, 3.25, 0.95, 0.5, 0.07, grey, 0.16);
+    gliderBody.wing(-0.12, -2.2, 0.02, 2.7, 3.25, 0.95, 0.5, 0.07, grey, 0.16);
+    gliderBody.box(0.72, 0.72, 3.15, 0.08, 1.1, 0.9, white, 0.16);
+    gliderBody.box(-0.72, 0.72, 3.15, 0.08, 1.1, 0.9, white, 0.16);
   }
   const gliderMesh = uploadGeometry(gliderBody.build());
   const canopy = new MeshBuilder();
-  canopy.sphere(0, 0.32, -2.15, 0.42, [0.13, 0.27, 0.4], 1.0, 0.78);
-  canopy.sphere(0, 0.3, -1.55, 0.47, [0.13, 0.27, 0.4], 1.0, 0.78);
+  canopy.sphere(0, 0.34, -2.0, 0.44, [0.1, 0.2, 0.3], 1.0, 0.76);
+  canopy.sphere(0, 0.32, -1.4, 0.48, [0.1, 0.2, 0.3], 1.0, 0.76);
   const canopyMesh = uploadGeometry(canopy.build());
+  // Cyan light strips: wing leading edges, spine and intake rims.
+  const accents = new MeshBuilder();
+  {
+    const cyan = [0.25, 0.85, 1.0];
+    accents.wing(3.15, 5.55, 0.03, -0.12, 0.72, 0.17, 0.13, 0.02, cyan, 0);
+    accents.wing(-3.15, -5.55, 0.03, -0.12, 0.72, 0.17, 0.13, 0.02, cyan, 0);
+    accents.box(0, 0.6, -0.5, 0.15, 0.05, 3.2, cyan, 0);
+    accents.box(0.52, -0.15, -0.42, 0.38, 0.42, 0.05, cyan, 0);
+    accents.box(-0.52, -0.15, -0.42, 0.38, 0.42, 0.05, cyan, 0);
+    accents.box(0.72, 1.3, 3.15, 0.09, 0.2, 0.9, cyan, 0);
+    accents.box(-0.72, 1.3, 3.15, 0.09, 0.2, 0.9, cyan, 0);
+  }
+  const accentsMesh = uploadGeometry(accents.build());
   const brakes = new MeshBuilder();
-  brakes.box(2.6, 0.12, 0.2, 1.3, 0.26, 0.6, [0.55, 0.19, 0.11], 0.1);
-  brakes.box(-2.6, 0.12, 0.2, 1.3, 0.26, 0.6, [0.55, 0.19, 0.11], 0.1);
+  brakes.box(2.2, 0.1, 0.1, 1.3, 0.26, 0.6, [0.3, 0.34, 0.4], 0.1);
+  brakes.box(-2.2, 0.1, 0.1, 1.3, 0.26, 0.6, [0.3, 0.34, 0.4], 0.1);
   const brakesMesh = uploadGeometry(brakes.build());
   const navLights = new MeshBuilder();
-  navLights.sphere(-5.2, -0.05, 1.2, 0.26, [1, 0.2, 0.2], 0);
-  navLights.sphere(5.2, -0.05, 1.2, 0.26, [0.2, 1, 0.45], 0);
+  navLights.sphere(-5.6, -0.08, 1.35, 0.24, [1, 0.2, 0.2], 0);
+  navLights.sphere(5.6, -0.08, 1.35, 0.24, [0.2, 1, 0.45], 0);
   const navLightsMesh = uploadGeometry(navLights.build());
   const strobe = new MeshBuilder();
-  strobe.sphere(0, 0.2, 3.7, 0.24, [1, 1, 1], 0);
+  strobe.sphere(0, 0.15, 3.9, 0.22, [1, 1, 1], 0);
   const strobeMesh = uploadGeometry(strobe.build());
   const burner = new MeshBuilder();
-  burner.sphere(0, 0, 3.74, 0.19, [1, 0.55, 0.15], 0);
+  burner.sphere(0, 0, 4.02, 0.17, [0.3, 0.85, 1.0], 0);
   const burnerMesh = uploadGeometry(burner.build());
 
   // ---------- Sprites: clouds and runway edge lights ----------
@@ -798,7 +813,8 @@ export function createRenderer(glCanvas, fxCanvas) {
       drawMesh(gliderMesh, mvp, gm);
       drawMesh(canopyMesh, mvp, gm);
       if (glider.airbrake) drawMesh(brakesMesh, mvp, gm);
-      drawMesh(burnerMesh, mvp, gm, { emissive: 1.8 });
+      drawMesh(accentsMesh, mvp, gm, { emissive: 1.5 });
+      drawMesh(burnerMesh, mvp, gm, { emissive: 2.0 });
       drawMesh(navLightsMesh, mvp, gm, { emissive: 1.3 });
       if (Math.sin(time * 2.4) > 0.72) drawMesh(strobeMesh, mvp, gm, { emissive: 1.6 });
     }
