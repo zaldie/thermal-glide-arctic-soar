@@ -8,8 +8,8 @@ import { terrainHeight, surfaceAt, SURFACE_COLOURS, RUNWAY, VILLAGE, LIGHTHOUSE,
 import { skyPalette } from "./thermalSky.js";
 import { clamp } from "./gliderPhysics.js";
 
-const FORWARD_STEPS = [0, 60, 130, 220, 340, 500, 700, 950, 1250, 1600, 2000, 2450, 2950, 3500, 4100, 4750, 5450];
-const LATERAL_STEPS = [-3400, -2400, -1700, -1200, -850, -580, -380, -220, -110, 0, 110, 220, 380, 580, 850, 1200, 1700, 2400, 3400];
+const FORWARD_STEPS = [0, 35, 80, 140, 215, 310, 430, 580, 770, 1010, 1310, 1670, 2090, 2570, 3120, 3740, 4430, 5190, 5900];
+const LATERAL_STEPS = [-3400, -2500, -1850, -1350, -980, -700, -480, -310, -180, -80, 0, 80, 180, 310, 480, 700, 980, 1350, 1850, 2500, 3400];
 
 export function createRenderer(canvas) {
   const ctx = canvas.getContext("2d");
@@ -215,18 +215,30 @@ export function createRenderer(canvas) {
         const cz = (a.wz + c.wz) / 2;
         const ch = (a.wy + c.wy) / 2;
         const surface = surfaceAt(cx, cz, ch);
-        let col = SURFACE_COLOURS[surface];
-        // Simple hill shading from the height difference across the quad.
-        let shade = clamp(0.88 + (a.wy - c.wy) * 0.004, 0.68, 1.12);
+        const col = SURFACE_COLOURS[surface];
+        // Two-axis hill shading plus a whisper of per-quad noise, so the
+        // snow reads as ground, not graph paper.
+        const grain = (treeHash(Math.round(cx / 90), Math.round(cz / 90)) - 0.5) * 0.07;
+        let baseShade = clamp(0.9 + (a.wy - c.wy) * 0.0034 + (b.wy - d.wy) * 0.0016 + grain, 0.66, 1.14);
         // Open water catches the light: a slow travelling shimmer.
         if (surface === "water") {
-          shade *= 1 + 0.09 * Math.sin(time * 1.2 + (cx * 0.011 + cz * 0.017));
+          baseShade *= 1 + 0.09 * Math.sin(time * 1.2 + (cx * 0.011 + cz * 0.017));
         }
         const fogT = clamp((a.p.depth - 500) / 5200, 0, 0.88);
-        ctx.fillStyle = rgb(blendCol(shadeCol(col, shade), palette.fog, fogT));
+        // The quad is drawn as two triangles, each shaded by its own corner
+        // heights: slopes get a soft gradient instead of one flat slab.
+        const shade1 = clamp(baseShade + (a.wy - ch) * 0.0022, 0.62, 1.16);
+        const shade2 = clamp(baseShade + (c.wy - ch) * 0.0022, 0.62, 1.16);
+        ctx.fillStyle = rgb(blendCol(shadeCol(col, shade1), palette.fog, fogT));
         ctx.beginPath();
         ctx.moveTo(a.p.x, a.p.y);
         ctx.lineTo(b.p.x, b.p.y);
+        ctx.lineTo(c.p.x, c.p.y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = rgb(blendCol(shadeCol(col, shade2), palette.fog, fogT));
+        ctx.beginPath();
+        ctx.moveTo(a.p.x, a.p.y);
         ctx.lineTo(c.p.x, c.p.y);
         ctx.lineTo(d.p.x, d.p.y);
         ctx.closePath();
@@ -506,54 +518,122 @@ export function createRenderer(canvas) {
 
   function drawGliderChase(glider, time) {
     // The glider sits centre-frame, banking with its roll, sinking/rising a
-    // touch with vertical speed so the picture always shows flight.
+    // touch with vertical speed so the picture always shows flight. It is
+    // drawn like a small scale model: tapered wings with panel lines and
+    // tip stripes, a shaded fuselage with a spine highlight, a glass canopy
+    // with the pilot's helmet inside, and a T-tail.
     const cx = W / 2;
     const cy = H * 0.56 + clamp(-glider.verticalSpeed * 2.2, -14, 18);
-    const s = Math.min(W, H) / 520;
+    const s = Math.min(W, H) / 470;
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(glider.roll * 0.9);
-    // Far wing (drawn first, slightly darker).
-    ctx.fillStyle = "#d8542e";
-    ctx.beginPath();
-    ctx.moveTo(-6 * s, 0);
-    ctx.lineTo(-118 * s, 12 * s);
-    ctx.lineTo(-122 * s, 20 * s);
-    ctx.lineTo(-8 * s, 8 * s);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = "#f06a35";
-    ctx.beginPath();
-    ctx.moveTo(6 * s, 0);
-    ctx.lineTo(118 * s, 12 * s);
-    ctx.lineTo(122 * s, 20 * s);
-    ctx.lineTo(8 * s, 8 * s);
-    ctx.closePath();
-    ctx.fill();
-    // Fuselage, seen from behind-above: a tapered body with a glass canopy.
-    const bodyGrad = ctx.createLinearGradient(0, -26 * s, 0, 16 * s);
-    bodyGrad.addColorStop(0, "#fdf3e3");
-    bodyGrad.addColorStop(0.55, "#f4e3c2");
-    bodyGrad.addColorStop(1, "#d9c491");
+    // Wing flex: the tips rise a touch under load in a turn.
+    const flex = clamp(Math.abs(glider.roll) * 7, 0, 5) * s;
+    const wingGrad = (flip) => {
+      const g = ctx.createLinearGradient(0, 0, flip * 128 * s, 0);
+      g.addColorStop(0, "#f2703d");
+      g.addColorStop(0.75, "#e85d2f");
+      g.addColorStop(1, "#d34e24");
+      return g;
+    };
+    for (const flip of [-1, 1]) {
+      // Main wing: swept, tapered, with a paler top sheen.
+      ctx.fillStyle = wingGrad(flip);
+      ctx.beginPath();
+      ctx.moveTo(flip * 5 * s, -3 * s);
+      ctx.lineTo(flip * 124 * s, 7 * s - flex);
+      ctx.lineTo(flip * 128 * s, 15 * s - flex);
+      ctx.lineTo(flip * 7 * s, 9 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,214,170,0.35)";
+      ctx.beginPath();
+      ctx.moveTo(flip * 5 * s, -3 * s);
+      ctx.lineTo(flip * 124 * s, 7 * s - flex);
+      ctx.lineTo(flip * 126 * s, 10 * s - flex);
+      ctx.lineTo(flip * 6 * s, 1 * s);
+      ctx.closePath();
+      ctx.fill();
+      // Aileron split line and the red tip band with its winglet.
+      ctx.strokeStyle = "rgba(120,40,16,0.55)";
+      ctx.lineWidth = Math.max(0.8, s * 0.8);
+      ctx.beginPath();
+      ctx.moveTo(flip * 92 * s, 5.4 * s - flex * 0.72);
+      ctx.lineTo(flip * 94 * s, 12.6 * s - flex * 0.72);
+      ctx.stroke();
+      ctx.fillStyle = "#b83a1e";
+      ctx.beginPath();
+      ctx.moveTo(flip * 112 * s, 6.2 * s - flex * 0.9);
+      ctx.lineTo(flip * 124 * s, 7 * s - flex);
+      ctx.lineTo(flip * 128 * s, 15 * s - flex);
+      ctx.lineTo(flip * 114 * s, 13.6 * s - flex * 0.9);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#8c2f1c";
+      ctx.beginPath();
+      ctx.moveTo(flip * 124 * s, 7 * s - flex);
+      ctx.lineTo(flip * 130 * s, -2 * s - flex);
+      ctx.lineTo(flip * 131 * s, 8 * s - flex);
+      ctx.closePath();
+      ctx.fill();
+    }
+    // Fuselage: shaded in three tones — lit spine, mid flank, dark belly.
+    const bodyGrad = ctx.createLinearGradient(0, -38 * s, 0, 30 * s);
+    bodyGrad.addColorStop(0, "#fff6e6");
+    bodyGrad.addColorStop(0.5, "#f6e5c4");
+    bodyGrad.addColorStop(1, "#cdb27f");
     ctx.fillStyle = bodyGrad;
     ctx.beginPath();
-    ctx.moveTo(0, -34 * s);
-    ctx.quadraticCurveTo(11 * s, -12 * s, 9 * s, 10 * s);
-    ctx.quadraticCurveTo(7 * s, 26 * s, 0, 30 * s);
-    ctx.quadraticCurveTo(-7 * s, 26 * s, -9 * s, 10 * s);
-    ctx.quadraticCurveTo(-11 * s, -12 * s, 0, -34 * s);
+    ctx.moveTo(0, -38 * s);
+    ctx.quadraticCurveTo(12 * s, -16 * s, 10.5 * s, 8 * s);
+    ctx.quadraticCurveTo(8.5 * s, 27 * s, 0, 33 * s);
+    ctx.quadraticCurveTo(-8.5 * s, 27 * s, -10.5 * s, 8 * s);
+    ctx.quadraticCurveTo(-12 * s, -16 * s, 0, -38 * s);
     ctx.fill();
-    // Tail.
-    ctx.fillStyle = "#d8542e";
-    ctx.fillRect(-22 * s, 22 * s, 44 * s, 6 * s);
-    ctx.fillRect(-3 * s, 8 * s, 6 * s, 20 * s);
-    // Canopy.
-    const canGrad = ctx.createLinearGradient(0, -26 * s, 0, -4 * s);
-    canGrad.addColorStop(0, "#bfe6f5");
-    canGrad.addColorStop(1, "#3d7ea6");
+    ctx.fillStyle = "rgba(120,90,40,0.25)";
+    ctx.beginPath();
+    ctx.moveTo(0, 33 * s);
+    ctx.quadraticCurveTo(-8.5 * s, 27 * s, -10.5 * s, 8 * s);
+    ctx.lineTo(-4 * s, 8 * s);
+    ctx.quadraticCurveTo(-4.5 * s, 24 * s, 0, 30 * s);
+    ctx.closePath();
+    ctx.fill();
+    // Spine highlight and two panel rings.
+    ctx.strokeStyle = "rgba(255,255,255,0.65)";
+    ctx.lineWidth = Math.max(0.8, s);
+    ctx.beginPath();
+    ctx.moveTo(0, -36 * s);
+    ctx.quadraticCurveTo(1.5 * s, -10 * s, 0, 26 * s);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(140,110,60,0.4)";
+    ctx.beginPath();
+    ctx.moveTo(-9.6 * s, 2 * s);
+    ctx.quadraticCurveTo(0, 5 * s, 9.6 * s, 2 * s);
+    ctx.stroke();
+    // T-tail: fin with a red tip, stabilizer shaded like the wings.
+    ctx.fillStyle = "#e85d2f";
+    ctx.fillRect(-24 * s, 24 * s, 48 * s, 5.5 * s);
+    ctx.fillStyle = "#f2703d";
+    ctx.fillRect(-3.4 * s, 6 * s, 6.8 * s, 20 * s);
+    ctx.fillStyle = "#b83a1e";
+    ctx.fillRect(-3.4 * s, 6 * s, 6.8 * s, 5 * s);
+    // Canopy: deep glass, a sky reflection, and the pilot's helmet inside.
+    const canGrad = ctx.createLinearGradient(0, -30 * s, 0, -2 * s);
+    canGrad.addColorStop(0, "#cfeefb");
+    canGrad.addColorStop(0.45, "#5f9ec2");
+    canGrad.addColorStop(1, "#2c5d7d");
     ctx.fillStyle = canGrad;
     ctx.beginPath();
-    ctx.ellipse(0, -15 * s, 6.4 * s, 11 * s, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, -16 * s, 7 * s, 13 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#3a3f45";
+    ctx.beginPath();
+    ctx.arc(0, -13 * s, 3.6 * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    ctx.beginPath();
+    ctx.ellipse(-2.4 * s, -21 * s, 1.8 * s, 5 * s, -0.4, 0, Math.PI * 2);
     ctx.fill();
     // Airbrake panels, visible when open.
     if (glider.airbrake) {
@@ -565,11 +645,11 @@ export function createRenderer(canvas) {
     // white tail strobe that blinks — tiny, but they sell the dusk shots.
     ctx.fillStyle = "#ff4444";
     ctx.beginPath();
-    ctx.arc(-120 * s, 16 * s, 2.6 * s, 0, Math.PI * 2);
+    ctx.arc(-127 * s, 11 * s, 2.6 * s, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = "#3dff7a";
     ctx.beginPath();
-    ctx.arc(120 * s, 16 * s, 2.6 * s, 0, Math.PI * 2);
+    ctx.arc(127 * s, 11 * s, 2.6 * s, 0, Math.PI * 2);
     ctx.fill();
     if (Math.sin(time * 2.4) > 0.72) {
       ctx.fillStyle = "rgba(255,255,255,0.95)";
