@@ -69,7 +69,11 @@ export const MISSIONS = [
     sky: { startPhase: 0.24, squall: false, windX: 3.6, windZ: 1.4 },
     rings: [
       ring(RUNWAY.centreX - 420, RUNWAY.groundY + 330, RUNWAY.centreZ + 500),
-      ring(DROP_ZONE.x - 100, RUNWAY.groundY + 250, DROP_ZONE.z + 520),
+      // On the shore line to the circle. (It first sat north of the
+      // village at y 314 with the hillside at 463 — inside the hill,
+      // unpassable; the audit that measured every gate against the
+      // terrain moved it onto the descent.)
+      ring(350, 350, DROP_ZONE.z + 70),
     ],
     objective: "drop",
     dropZone: DROP_ZONE,
@@ -107,7 +111,10 @@ export const MISSIONS = [
       ring(RUNWAY.centreX - 520, RUNWAY.groundY + 330, RUNWAY.centreZ + 780),
       ring(RUNWAY.centreX + 430, RUNWAY.groundY + 310, RUNWAY.centreZ + 120),
       ring(RUNWAY.centreX - 300, RUNWAY.groundY + 285, RUNWAY.centreZ - 480),
-      ring(RUNWAY.centreX + 260, RUNWAY.groundY + 240, RUNWAY.centreZ - 980),
+      // (Moved west and up from a first spot whose hillside stood
+      // 39 m over the gate's centre — the pass sphere never reached
+      // the air above it. Descent 349 → 296 → 244 preserved.)
+      ring(400, 296, RUNWAY.centreZ - 850),
       ring(RUNWAY.centreX, RUNWAY.groundY + 180, RUNWAY.centreZ - 1350),
     ],
     objective: "rings",
@@ -128,7 +135,10 @@ export const MISSIONS = [
       ring(RUNWAY.centreX - 300, RUNWAY.groundY + 215, RUNWAY.centreZ + 700),
       ring(RUNWAY.centreX + 260, RUNWAY.groundY + 185, RUNWAY.centreZ + 60),
       ring(RUNWAY.centreX - 180, RUNWAY.groundY + 160, RUNWAY.centreZ - 520),
-      ring(RUNWAY.centreX, RUNWAY.groundY + 140, RUNWAY.centreZ - 980),
+      // (280 m closer than first authored: at centreZ - 980 the
+      // ground stands at 292, 88 m over this gate's centre — in the
+      // one mission with no lift to spare, an unpassable final gate.)
+      ring(RUNWAY.centreX, RUNWAY.groundY + 140, RUNWAY.centreZ - 700),
     ],
     objective: "rings",
     landAtRunway: true,
