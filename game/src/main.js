@@ -452,7 +452,7 @@ function updateFlight(dt) {
     score = Math.max(0, score - SCORE.stallPenalty);
   }
   if (events.airframeFailed) {
-    finishFlight(false, "AIRFRAME FAILURE", "The wing spar gave way. Overspeed and steep, fast turns had been writing cheques the structure could not cash — ease off past 155 km/h, and bank gently when you are fast.");
+    finishFlight(false, "AIRFRAME FAILURE", "The wing spar gave way. Overspeed and steep, fast turns had been writing cheques the structure could not cash — ease off past 144 km/h, and bank gently when you are fast.");
     return;
   }
   // The parcel drifts down under its canopy until it meets the ground.
@@ -551,6 +551,14 @@ function frame(now) {
   const { W, H } = renderer ? renderer.size : { W: canvas.clientWidth, H: canvas.clientHeight };
 
   if (bootError) {
+    // The renderer's resize() is the only code that ever sizes the
+    // overlay canvas — and it is exactly what failed to boot. Without
+    // this the error text lands outside the default 300x150 bitmap
+    // and the player stares at a dark, empty page.
+    if (canvas.width !== W || canvas.height !== H) {
+      canvas.width = W;
+      canvas.height = H;
+    }
     drawErrorScreen(ctx, W, H, `${bootError.message} Try a current desktop Chrome. Your save and settings are untouched.`);
     return;
   }
