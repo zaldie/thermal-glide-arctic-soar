@@ -396,7 +396,11 @@ export function drawBriefingScreen(ctx, W, H, snap) {
   ctx.font = '600 17px "Segoe UI", sans-serif';
   ctx.fillStyle = "#9fd8e8";
   const best = snap.save.bestScore[snap.mission.id];
-  ctx.fillText(best ? `Best score ${best} · Best time ${formatTime(snap.save.bestTime[snap.mission.id] || 0)}` : "No flights yet on this sortie — set the first score.", W / 2, H * 0.3 + 118);
+  // Free Soar keeps no score (its results screen honours the same
+  // promise), so its briefing must not dangle a first score to set.
+  ctx.fillText(snap.mission.objective === "free"
+    ? "Free flight — no score is kept. The sky is the logbook."
+    : best ? `Best score ${best} · Best time ${formatTime(snap.save.bestTime[snap.mission.id] || 0)}` : "No flights yet on this sortie — set the first score.", W / 2, H * 0.3 + 118);
   ctx.fillStyle = "#57e389";
   ctx.font = '700 22px "Segoe UI", sans-serif';
   blinkSoft(ctx, snap.time);
