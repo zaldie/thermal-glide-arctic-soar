@@ -194,12 +194,42 @@ function applyShotScene() {
   showMessage("", 0);
   message = null;
   // A scene may stage the mail parcel mid-fall, the frame a second after
-  // a real release: score already banked, parcel under its canopy.
+  // a real release: score already banked, parcel under its canopy. It
+  // leaves with the glider's own velocity, exactly as tryDrop spawns it,
+  // so it travels with the frame instead of dropping out of it.
   if (shotScene.parcel) {
-    parcel = { ...shotScene.parcel, vx: 0, vz: 0, vy: -11, spin: 0.6 };
+    parcel = {
+      ...shotScene.parcel,
+      vx: Math.sin(glider.heading) * glider.speed * 0.92,
+      vz: -Math.cos(glider.heading) * glider.speed * 0.92,
+      vy: -11,
+      spin: 0.6,
+    };
     dropped = true;
   }
   if (shotScene.message) showMessage(shotScene.message, 30);
+  // A scene may mark the mail as already away without staging the
+  // parcel itself (the results panel's checklist reads this flag).
+  if (shotScene.dropped) dropped = true;
+  // A scene may freeze the sortie at its results panel: the breakdown
+  // lines and stars a real finish prints, over the strip it ended on.
+  if (shotScene.result) {
+    const r = shotScene.result;
+    scoreParts = { rings: 0, drop: 0, landing: 0, stalls: 0, ...r.parts };
+    result = {
+      finished: true,
+      title: r.title,
+      reason: r.reason,
+      landingNote: r.landingNote || null,
+      score,
+      seconds,
+      stars: r.stars,
+      ringsFlown: r.ringsFlown,
+      isBest: !!r.isBest,
+      parts: { ...scoreParts },
+    };
+    mode = "result";
+  }
 }
 
 // ---------- Flight rules ----------

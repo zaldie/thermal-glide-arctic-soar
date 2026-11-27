@@ -54,6 +54,63 @@ export const SHOT_SCENES = {
     seconds: 97,
     ringIndex: 1,
   },
+  // Drop: the mail run a second after release — parcel under its
+  // canopy just ahead and below the glider, the drop circle dead ahead
+  // on the shore at Port Svarra, both guide rings already flown. The
+  // approach runs close, from the north-west at 220 m out: from across
+  // the fjord the circle hid behind the ridge and read as a speck, so
+  // the frame is taken where the player actually releases — low, near,
+  // with the village at the circle's shoulder.
+  drop: {
+    missionIndex: 2,
+    view: "chase",
+    glider: { x: 499, y: 425, z: -2318, heading: 2.14, pitch: 0, roll: 0.2, speed: 25, stress: 0.18 },
+    dayPhase: 0.24,
+    simSeconds: 40,
+    score: 600,
+    seconds: 88,
+    ringIndex: 2,
+    parcel: { x: 504, y: 421.5, z: -2315 },
+    message: "MAIL AWAY",
+  },
+  // Storm: Storm Line with the squall wall at the glider's shoulder —
+  // simSeconds marches the wall in from its far-west start until its
+  // face is ~550 m west of the first gate, close enough that the snow
+  // streaks and the STORM warning read on the HUD. STRUCT near half:
+  // the pilot is spending the airframe to beat the weather.
+  storm: {
+    missionIndex: 3,
+    view: "chase",
+    glider: { x: -700, y: 420, z: 250, heading: 0.9, pitch: 0.04, roll: 0.28, speed: 29, stress: 0.52 },
+    dayPhase: 0.38,
+    simSeconds: 188,
+    score: 300,
+    seconds: 51,
+    ringIndex: 1,
+  },
+  // Result: Supply Drop flown home — the results panel a real finish
+  // prints, breakdown lines and all, over the strip it ended on. This
+  // is the depth receipt: rings, the drop itself, the landing note.
+  result: {
+    missionIndex: 2,
+    view: "chase",
+    glider: { x: LANDING_X, y: RUNWAY.groundY + 1.6, z: RUNWAY.centreZ + 260, heading: 0, pitch: 0, roll: 0, speed: 17, airbrake: true, stress: 0.22 },
+    dayPhase: 0.3,
+    simSeconds: 40,
+    score: 1050,
+    seconds: 186,
+    ringIndex: 2,
+    dropped: true,
+    result: {
+      title: "SORTIE COMPLETE",
+      reason: "Every objective flown and a landing the strip crew would applaud.",
+      stars: 3,
+      ringsFlown: 2,
+      isBest: true,
+      landingNote: "touchdown at 61 km/h, sink -1.1 m/s",
+      parts: { rings: 600, drop: 450, landing: 0, stalls: 0 },
+    },
+  },
   // Landing: the payoff moment — just touched down on the ice strip,
   // brakes out, spray flying, the grade on screen, all rings flown.
   landing: {
