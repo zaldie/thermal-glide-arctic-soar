@@ -54,8 +54,12 @@ export const SHOT_SCENES = {
     seconds: 97,
     ringIndex: 1,
   },
-  // Drop: the mail run a second after release — parcel under its
-  // canopy just ahead and below the glider, the drop circle dead ahead
+  // Drop: the mail run a second after release — the parcel spawns at
+  // the release point and parcelAge pre-flies its fall for 0.55 s, so
+  // the frame catches it detached below the airframe, canopy open and
+  // turned to camera. (Staged at the release instant it sat inside
+  // the glider's silhouette and the release read as nothing at all.)
+  // The drop circle dead ahead
   // on the shore at Port Svarra, both guide rings already flown. The
   // approach runs close, from the north-west at 220 m out: from across
   // the fjord the circle hid behind the ridge and read as a speck, so
@@ -71,6 +75,7 @@ export const SHOT_SCENES = {
     seconds: 88,
     ringIndex: 2,
     parcel: { x: 504, y: 421.5, z: -2315 },
+    parcelAge: 0.55,
     message: "MAIL AWAY",
   },
   // Storm: Storm Line with the squall wall at the glider's shoulder —

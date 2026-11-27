@@ -208,6 +208,22 @@ function applyShotScene() {
       spin: 0.6,
     };
     dropped = true;
+    // A scene may pre-fly the fall (parcelAge seconds, stepped with
+    // the frame loop's own parcel equations) so the frame catches
+    // the parcel detached and under canopy, not inside the
+    // airframe's silhouette at the release instant.
+    if (shotScene.parcelAge) {
+      const step = 0.05;
+      for (let t = 0; t < shotScene.parcelAge; t += step) {
+        parcel.vy = Math.max(parcel.vy - 26 * step, -13);
+        parcel.vx *= 1 - 0.55 * step;
+        parcel.vz *= 1 - 0.55 * step;
+        parcel.x += parcel.vx * step;
+        parcel.y += parcel.vy * step;
+        parcel.z += parcel.vz * step;
+        parcel.spin += step * 0.7;
+      }
+    }
   }
   if (shotScene.message) showMessage(shotScene.message, 30);
   // A scene may mark the mail as already away without staging the
