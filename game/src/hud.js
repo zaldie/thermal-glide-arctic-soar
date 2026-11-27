@@ -424,7 +424,7 @@ export function drawResultScreen(ctx, W, H, snap) {
   ctx.fillStyle = "#eaf6fb";
   ctx.font = '400 19px "Segoe UI", sans-serif';
   wrapText(ctx, r.reason, W / 2, H * 0.24 + 44, 640, 27);
-  if (r.finished) {
+  if (r.finished && snap.mission.starTimes) {
     ctx.font = '800 30px "Segoe UI", sans-serif';
     ctx.fillStyle = "#ffcf4d";
     ctx.fillText("★".repeat(r.stars) + "☆".repeat(3 - r.stars), W / 2, H * 0.24 + 108);
@@ -437,14 +437,21 @@ export function drawResultScreen(ctx, W, H, snap) {
     r.parts.landing ? `landing +${r.parts.landing}` : null,
     r.parts.stalls ? `stalls −${r.parts.stalls}` : null,
   ].filter(Boolean).join("  ·  ") : "";
-  const rows = [
-    `Score  ${Math.round(r.score)}`,
-    breakdown || null,
-    `Time  ${formatTime(r.seconds)}`,
-    `Rings  ${r.ringsFlown}/${snap.mission.rings.length}`,
-    r.landingNote ? `Landing  ${r.landingNote}` : null,
-    r.isBest ? "New best score on this sortie!" : null,
-  ].filter(Boolean);
+  // Free Soar's brief promises "no rings, no clock" — its results
+  // screen honours that: no score, no time, no rings tally, just
+  // how the landing went. (It used to print Score 0, Rings 0/0
+  // and three empty stars, a failure report for a mode with
+  // nothing to fail.)
+  const rows = (snap.mission.objective === "free"
+    ? [r.landingNote ? `Landing  ${r.landingNote}` : null]
+    : [
+      `Score  ${Math.round(r.score)}`,
+      breakdown || null,
+      `Time  ${formatTime(r.seconds)}`,
+      `Rings  ${r.ringsFlown}/${snap.mission.rings.length}`,
+      r.landingNote ? `Landing  ${r.landingNote}` : null,
+      r.isBest ? "New best score on this sortie!" : null,
+    ]).filter(Boolean);
   rows.forEach((row, i) => ctx.fillText(row, W / 2, H * 0.46 + i * 32));
   ctx.fillStyle = "#57e389";
   ctx.font = '700 21px "Segoe UI", sans-serif';
