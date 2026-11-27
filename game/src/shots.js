@@ -81,9 +81,15 @@ export const SHOT_SCENES = {
   storm: {
     missionIndex: 3,
     view: "chase",
-    glider: { x: -700, y: 420, z: 250, heading: 0.9, pitch: 0.04, roll: 0.28, speed: 29, stress: 0.52 },
+    // The squall has no wall mesh — its face is a screen-space
+    // whiteout whose density peaks within ~150 m of the front, so
+    // the glider sits right at the edge of it: at 209 s the face
+    // stands at x = -811 and the glider 160 m east of it, over the
+    // fjord, flying in. (Distant stagings read as a calm cruise:
+    // the streaks all but vanish past a few hundred metres.)
+    glider: { x: -650, y: 470, z: -2450, heading: -1.3, pitch: 0.02, roll: 0.3, speed: 31, stress: 0.62 },
     dayPhase: 0.38,
-    simSeconds: 188,
+    simSeconds: 209,
     score: 300,
     seconds: 51,
     ringIndex: 1,
