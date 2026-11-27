@@ -12,7 +12,7 @@ export function defaultSave() {
     bestScore: {}, // missionId -> number
     bestTime: {}, // missionId -> seconds
     totalFlightSeconds: 0,
-    settings: { sensitivity: 1, volume: 0.7, invertY: false, quality: "high" },
+    settings: { sensitivity: 1, volume: 0.7, invertY: false },
     continueSortie: null, // { missionId, missionName, glider, ringIndex, score, seconds, parts, dropped, dayPhase }
   };
 }
