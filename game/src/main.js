@@ -497,6 +497,10 @@ function snapshot() {
     sinkWarning: glider ? glider.verticalSpeed < -4.2 && air.lift < 0.5 : false,
     stormWarning: sky?.squall.active && Math.abs(glider.x - sky.squall.x) < sky.squall.width * 1.8,
     message, dropped, parcel, result, save, touchdown,
+    // The HUD checklist ticks its landing line off this flag; it is the
+    // one field hud.js read that the snapshot never supplied, so the
+    // line stayed unticked even on the results screen of a real landing.
+    landed: !!(touchdown || (result && result.finished)),
     menuItems: menuItems(),
     menuIndex,
   };

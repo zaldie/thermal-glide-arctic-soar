@@ -176,7 +176,6 @@ export function createRenderer(glCanvas, fxCanvas) {
   const brakesMesh = uploadGeometry(aircraft.brakes);
   const navLightsMesh = uploadGeometry(aircraft.navLights);
   const strobeMesh = uploadGeometry(aircraft.strobe);
-  const burnerMesh = uploadGeometry(aircraft.burner);
   const aileronRMesh = uploadGeometry(aircraft.aileronR);
   const aileronLMesh = uploadGeometry(aircraft.aileronL);
   const elevatorRMesh = uploadGeometry(aircraft.elevatorR);
@@ -607,7 +606,6 @@ export function createRenderer(glCanvas, fxCanvas) {
       drawMesh(elevatorLMesh, mat4Multiply(viewProj, eleL), eleL);
       if (glider.airbrake) drawMesh(brakesMesh, mvp, gm);
       drawMesh(accentsMesh, mvp, gm, { emissive: 1.5 });
-      drawMesh(burnerMesh, mvp, gm, { emissive: 0.5 });
       drawMesh(navLightsMesh, mvp, gm, { emissive: 1.3 });
       if (Math.sin(time * 2.4) > 0.72) drawMesh(strobeMesh, mvp, gm, { emissive: 1.6 });
     }

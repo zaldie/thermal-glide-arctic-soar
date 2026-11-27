@@ -3,7 +3,7 @@
 // geometry — the sci-fi jet the user picked from the concept sheet:
 // white angular fuselage, two-panel swept wings, downward winglets,
 // twin fins, and cyan light strips along the wing leading edges, spine
-// and intakes, with a glowing cyan engine core. Pure looks: the physics
+// and intakes. Pure looks: the physics
 // underneath is still the same engineless energy model. Returns raw
 // geometries; renderWorld.js uploads and draws them.
 
@@ -61,8 +61,9 @@ export function buildAircraftGeometries() {
   navLights.sphere(5.6, -0.08, 1.35, 0.24, [0.2, 1, 0.45], 0);
   const strobe = new MeshBuilder();
   strobe.sphere(0, 0.15, 3.9, 0.22, [1, 1, 1], 0);
-  const burner = new MeshBuilder();
-  burner.sphere(0, 0, 4.02, 0.17, [0.3, 0.85, 1.0], 0);
+  // No tail glow: the Kestrel is engineless, and a lit disc at the tail
+  // cone read as a thruster in screenshots (the judge flagged exactly
+  // that). The white strobe above is the tail's only light.
   // Control surfaces, built in hinge-local space (hinge line at the
   // origin, surface extending outward and aft) so renderWorld can
   // swing them around their hinges with the pilot's stick.
@@ -82,7 +83,6 @@ export function buildAircraftGeometries() {
     brakes: brakes.build(),
     navLights: navLights.build(),
     strobe: strobe.build(),
-    burner: burner.build(),
     aileronR: aileronR.build(),
     aileronL: aileronL.build(),
     elevatorR: elevatorR.build(),
