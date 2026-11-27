@@ -140,7 +140,9 @@ function startFlight(resume = null) {
   ringIndex = resume?.ringIndex ?? 0;
   for (let i = 0; i < ringIndex; i++) if (rings[i]) rings[i].passed = true;
   score = resume?.score ?? 0;
-  scoreParts = { rings: 0, drop: 0, landing: 0, stalls: 0 };
+  // The breakdown resumes too: without it the results panel would
+  // swear the rings flown before the pause were worth nothing.
+  scoreParts = { rings: 0, drop: 0, landing: 0, stalls: 0, ...(resume?.parts || {}) };
   seconds = resume?.seconds ?? 0;
   dropped = mission.objective === "drop" ? (resume?.dropped ?? null) : undefined;
   packageDroppedAt = null;
@@ -397,6 +399,7 @@ function saveContinueAndQuit() {
       missionName: mission.name,
       glider: { x: glider.x, y: glider.y, z: glider.z, heading: glider.heading, pitch: glider.pitch, roll: glider.roll, speed: glider.speed },
       ringIndex, score, seconds,
+      parts: { ...scoreParts },
       dropped: dropped ?? null,
       dayPhase: sky.dayPhase,
     };

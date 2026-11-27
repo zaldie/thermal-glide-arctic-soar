@@ -13,7 +13,7 @@ export function defaultSave() {
     bestTime: {}, // missionId -> seconds
     totalFlightSeconds: 0,
     settings: { sensitivity: 1, volume: 0.7, invertY: false, quality: "high" },
-    continueSortie: null, // { missionId, glider, ringIndex, score, seconds }
+    continueSortie: null, // { missionId, missionName, glider, ringIndex, score, seconds, parts, dropped, dayPhase }
   };
 }
 
