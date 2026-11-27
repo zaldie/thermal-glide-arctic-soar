@@ -155,12 +155,10 @@ export const FREE_SOAR = {
 export const SCORE = {
   ringCentre: 300,
   ringEdge: 140,
-  heightBankedPerMetre: 0.4, // landing with altitude unspent still counts
   landingPrecisionMax: 500, // aurora run: full marks on the numbers
   dropAccurate: 450,
   dropNear: 200,
   stallPenalty: 60,
-  secondBonusMax: 400,
 };
 
 export function starsFor(mission, seconds, finished) {

@@ -75,8 +75,9 @@ heightmap and landmarks), `gliderPhysics.js` (the energy flight model),
 included), `worldScenery.js` (forest, village, boats, runway, lighthouse),
 `renderWorld.js` (the painter), `hud.js` (instruments and screens),
 `inputPilot.js`, `audioVariometer.js` (synthesized variometer, wind and
-chimes — no audio files), `saveGame.js`, and `shots.js` (the deterministic
-screenshot scenes). No libraries: everything is hand-written JavaScript,
+chimes — no audio files), `saveGame.js`, `shots.js` (the deterministic
+screenshot scenes), and `main.js` (boot, the state machine and the rules
+of a flight). No libraries: everything is hand-written JavaScript,
 which keeps the entry small and entirely our own work.
 
 ---

@@ -285,10 +285,6 @@ function tryDrop() {
 
 function finishFlight(finished, title, reason, landingNote = null) {
   const stars = starsFor(mission, seconds, finished);
-  if (finished && mission.landAtRunway) {
-    const unspent = Math.max(0, glider.y - RUNWAY.groundY);
-    void unspent;
-  }
   const isBest = finished && score > (save.bestScore[mission.id] || 0);
   result = {
     finished, title, reason, landingNote,
