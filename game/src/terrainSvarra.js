@@ -30,7 +30,7 @@ function smoothNoise(x, z, cell) {
 }
 
 // The fjord is a winding channel carved below sea level. Its centreline is
-// x = fjordCentreZ(z); terrain within FJORD_HALF_WIDTH of it is water.
+// x = fjordCentreX(z); terrain within FJORD_HALF_WIDTH of it is water.
 export function fjordCentreX(z) {
   return Math.sin(z * 0.00042) * 620 + Math.sin(z * 0.0011 + 1.7) * 180;
 }

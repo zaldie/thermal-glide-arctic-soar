@@ -4,7 +4,7 @@
 // briefing / pause / results / help / error screens. Pure drawing: main.js
 // owns the state, this file only reads a snapshot and paints it.
 
-import { RUNWAY, VILLAGE, LIGHTHOUSE } from "./terrainSvarra.js";
+import { RUNWAY, VILLAGE, LIGHTHOUSE, fjordCentreX } from "./terrainSvarra.js";
 import { energyHeight, GLIDER } from "./gliderPhysics.js";
 import { clamp } from "./gliderPhysics.js";
 
@@ -267,7 +267,7 @@ function drawMinimap(ctx, cx, cy, size, snap) {
   ctx.lineWidth = 5;
   ctx.beginPath();
   for (let z = -6000; z <= 6000; z += 600) {
-    const fx = Math.sin(z * 0.00042) * 620 + Math.sin(z * 0.0011 + 1.7) * 180;
+    const fx = fjordCentreX(z);
     const [mx, my] = toMap(fx, z);
     if (z === -6000) ctx.moveTo(mx, my);
     else ctx.lineTo(mx, my);
